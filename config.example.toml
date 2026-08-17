@@ -1,0 +1,28 @@
+# Personal DE toolkit paths and defaults.
+# Edit freely — this file is outside git.
+
+[paths]
+bi_astronomer = "/Users/shawn.skillman/github/bi-astronomer"
+bi_dbt = "/Users/shawn.skillman/github/bi-dbt"
+bi_react = "/Users/shawn.skillman/github/bi-react"
+udi_dbt = "/Users/shawn.skillman/UDI/dbt"
+
+[defaults]
+# Used by future commands; astro-dags still accepts dev|prod on the CLI.
+astro_env = "dev"
+# Default local dbt project name (must match a key under [dbt.projects]).
+dbt_project = "bi-dbt"
+
+# Local dirs that contain dbt_project.yml.
+# String value = path key or absolute path (engine=auto → prefer nearby Core, else PATH).
+# Nested table = path + engine (core|cloud|auto) + optional binary.
+#
+# UDI uses dbt Core + ~/.dbt/profiles.yml (not Homebrew Cloud CLI / dbt_cloud.yml).
+[dbt.projects.bi-dbt]
+path = "bi_dbt"
+engine = "cloud"
+
+[dbt.projects.udi]
+path = "udi_dbt"
+engine = "core"
+binary = "/Users/shawn.skillman/UDI/.venv/bin/dbt"

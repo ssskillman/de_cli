@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# de — personal DE ops toolkit (Typer wrappers around CLIs + repo scripts).
+#
+# Usage:
+#   de                         # interactive fzf menu
+#   de --list
+#   de doctor
+#   de astro-dags [args...]
+#   de fivetran  [args...]
+#   de astro-deploy
+#
+# Home:     ~/de
+# Config:   ~/.config/de/config.toml
+# Registry: ~/de/de_cli/registry.py
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DE_HOME="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+if [[ -x "$DE_HOME/.venv/bin/python" ]]; then
+  PYTHON="$DE_HOME/.venv/bin/python"
+else
+  echo "ERROR: missing $DE_HOME/.venv — run:" >&2
+  echo "  python3 -m venv $DE_HOME/.venv && $DE_HOME/.venv/bin/pip install -r $DE_HOME/requirements.txt" >&2
+  exit 1
+fi
+
+export PYTHONPATH="${DE_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PYTHON" -m de_cli "$@"
