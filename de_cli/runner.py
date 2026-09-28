@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,7 +12,30 @@ from rich.console import Console
 from rich.table import Table
 
 from .banner import print_banner
+from .menu_confirm import confirm_menu_run
+from .menu_guide import group_blurb, print_menu_groups_guide
+from .menu_groups import (
+    breadcrumb,
+    menu_group_for_tool,
+    menu_group_label,
+    ordered_menu_groups,
+    tool_menu_line,
+    tools_by_names,
+    tools_in_menu_group,
+)
+from .menu_pick import pick_key, pick_tool_from_list
+from .menu_state import (
+    ALL_TOOLS_KEY,
+    GUIDE_KEY,
+    PINNED_KEY,
+    RECENT_KEY,
+    push_recent_tool,
+    read_pinned_tool_names,
+    read_recent_tool_names,
+    write_last_menu_group,
+)
 from .registry import Tool, find_tool, tools_sorted
+from .snowflake_local import apply_snowflake_local_user
 
 console = Console(stderr=True)
 
@@ -24,6 +46,13 @@ RETURN_TO_MENU_CODE = 10
 def run_tool(tool: Tool, args: Sequence[str] | None = None) -> int:
     """Run a tool via subprocess (keeps `de` alive so we can return to the menu)."""
     forwarded: list[str] = list(args or ())
+    if not forwarded and tool.default_args:
+        forwarded = list(tool.default_args)
+        console.print(
+            f"[dim]no args — using defaults:[/dim] [bold]{tool.name} "
+            f"{' '.join(forwarded)}[/bold]"
+        )
+    forwarded = apply_snowflake_local_user(tool, forwarded)
 
     # Multi-project dbt: strip -p/--project/--pick; resolve local project cwd + binary.
     if tool.name == "dbt":
@@ -99,6 +128,7 @@ def run_tool(tool: Tool, args: Sequence[str] | None = None) -> int:
             return int(subprocess.call(cmd, cwd=str(proj.path)))
         except OSError as e:
             console.print(f"[red]ERROR:[/red] failed to run {cmd[0]}: {e}")
+            _explain_exec_failure(binary)
             return 1
 
     try:
@@ -134,7 +164,21 @@ def run_tool(tool: Tool, args: Sequence[str] | None = None) -> int:
         return int(subprocess.call(cmd, cwd=str(cwd) if cwd else None))
     except OSError as e:
         console.print(f"[red]ERROR:[/red] failed to run {cmd[0]}: {e}")
+        _explain_exec_failure(Path(executable))
         return 1
+
+
+def _explain_exec_failure(executable: Path) -> None:
+    """ENOENT on an existing script usually means its `#!` interpreter is gone."""
+    if not executable.is_file():
+        return
+    from .dbt_projects import broken_binary_advice, interpreter_problem
+
+    problem = interpreter_problem(executable)
+    if problem is None:
+        return
+    console.print(f"[yellow]Cause:[/yellow] the file exists, but {problem}.")
+    console.print(broken_binary_advice(executable))
 
 
 def ask_return_to_menu() -> bool:
@@ -185,51 +229,119 @@ def list_tools(*, as_table: bool = True) -> None:
     console.print(table)
 
 
-def fzf_pick_tool() -> Tool | None:
-    """Interactive ↑/↓ fuzzy picker over the tool registry (alpha by name)."""
-    if not shutil.which("fzf"):
-        console.print(
-            "[red]ERROR:[/red] fzf not found. Install with: [bold]brew install fzf[/bold]"
+_HDR_NAV = "__hdr_nav__"
+_HDR_PLAT = "__hdr_plat__"
+_MENU_HEADINGS = frozenset({_HDR_NAV, _HDR_PLAT})
+
+
+def _menu_heading(label: str) -> str:
+    return f"\x1b[1;36m── {label}\x1b[0m"
+
+
+def _menu_group_entries() -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = [(_HDR_NAV, _menu_heading("Navigate"))]
+    total = len(tools_sorted())
+    entries.append(
+        (
+            ALL_TOOLS_KEY,
+            f"{'All tools':<12}  ({total} tools)  Search the full registry",
         )
+    )
+    pinned = tools_by_names(read_pinned_tool_names())
+    if pinned:
+        entries.append(
+            (
+                PINNED_KEY,
+                f"{'Pinned':<12}  ({len(pinned)} tools)  [menu] pinned in config.toml",
+            )
+        )
+    recent = tools_by_names(read_recent_tool_names())
+    if recent:
+        entries.append(
+            (
+                RECENT_KEY,
+                f"{'Recent':<12}  ({len(recent)} tools)  Last tools you ran",
+            )
+        )
+    entries.append(
+        (
+            GUIDE_KEY,
+            f"{'Guide':<12}         What each group is for (like de groups)",
+        )
+    )
+    entries.append((_HDR_PLAT, _menu_heading("Platforms")))
+    for key, subtitle in ordered_menu_groups():
+        count = len(tools_in_menu_group(key))
+        label = menu_group_label(key)
+        entries.append(
+            (key, f"{label:<12}  ({count} tools)  {subtitle}")
+        )
+    return entries
+
+
+def pick_menu_group() -> str | None:
+    while True:
+        key = pick_key(
+            _menu_group_entries(),
+            header="Pick a group  ·  ↑/↓  ·  filter  ·  Enter  ·  Esc cancel",
+            prompt="de group > ",
+            list_title="de menu groups",
+        )
+        if key in _MENU_HEADINGS:
+            continue
+        return key
+
+
+def _tools_for_menu_group(menu_group: str | None) -> tuple[Tool, ...]:
+    if menu_group == PINNED_KEY:
+        return tools_by_names(read_pinned_tool_names())
+    if menu_group == RECENT_KEY:
+        return tools_by_names(read_recent_tool_names())
+    if menu_group == ALL_TOOLS_KEY:
+        return tools_sorted()
+    if menu_group:
+        return tools_in_menu_group(menu_group)
+    return tools_sorted()
+
+
+def pick_tool(menu_group: str | None = None) -> Tool | None:
+    tools = list(_tools_for_menu_group(menu_group))
+    if not tools:
+        console.print("[yellow]No tools in this group.[/yellow]")
         return None
 
-    lines: list[str] = []
-    for tool in tools_sorted():
-        alias_bit = f"  aliases: {', '.join(tool.aliases)}" if tool.aliases else ""
-        display = (
-            f"{tool.name:<22}  {tool.category:<10}  {tool.description}{alias_bit}"
+    scope = menu_group_label(menu_group) if menu_group else ""
+    show_hints = menu_group in {RECENT_KEY, PINNED_KEY}
+
+    blurb = (
+        group_blurb(menu_group)
+        if menu_group
+        and menu_group
+        not in {ALL_TOOLS_KEY, RECENT_KEY, PINNED_KEY, GUIDE_KEY}
+        else None
+    )
+    if blurb:
+        console.print(f"[dim]{blurb}[/dim]\n")
+
+    def label(tool: Tool) -> str:
+        bucket = (
+            scope
+            if menu_group
+            and menu_group not in {ALL_TOOLS_KEY, RECENT_KEY, PINNED_KEY}
+            else menu_group_label(menu_group_for_tool(tool))
         )
-        lines.append(f"{tool.name}\t{display}")
+        summary = tool_menu_line(tool, include_hint=show_hints)
+        return f"{tool.name:<22}  {bucket:<10}  {summary}"
 
-    header = (
-        "Pick a tool  ·  ↑/↓ navigate  ·  type to filter  ·  Enter run  ·  Esc cancel"
+    trail = breadcrumb(menu_group)
+    return pick_tool_from_list(
+        tools,
+        key_fn=lambda t: t.name,
+        label_fn=label,
+        header=f"{trail}  ·  ↑/↓  ·  filter  ·  Enter run  ·  Esc back",
+        prompt=f"de {menu_group or 'tools'} > ",
+        list_title=f"Tools · {trail}",
     )
-    proc = subprocess.run(
-        [
-            "fzf",
-            "--ansi",
-            "--height=60%",
-            "--reverse",
-            "--border=rounded",
-            "--cycle",
-            "--delimiter=\t",
-            "--with-nth=2",
-            "--prompt=de > ",
-            "--pointer=▶",
-            "--marker=◉ ",
-            f"--header={header}",
-            "--info=inline",
-        ],
-        input="\n".join(lines) + "\n",
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-
-    name = proc.stdout.split("\t", 1)[0].strip()
-    return find_tool(name)
 
 
 def interactive_menu(
@@ -239,40 +351,50 @@ def interactive_menu(
 ) -> int:
     """Show fzf menu, run tools, and optionally return to the menu after each run."""
     if show_banner:
-        print_banner(console, compact=True)
+        print_banner(console)
 
     last_code = 0
+    group: str | None = None
     while True:
-        if not sys.stdin.isatty() or not sys.stdout.isatty():
-            console.print(
-                "[yellow]No TTY for interactive menu.[/yellow] "
-                "Use [bold]de --list[/bold] or [bold]de <tool>[/bold]."
-            )
-            if last_code == 0 and forward_args is None:
-                list_tools()
-                return 1
-            return last_code
+        if group is None:
+            group = pick_menu_group()
+            if group is None:
+                console.print("[dim]Cancelled.[/dim]")
+                return last_code
 
-        tool = fzf_pick_tool()
+            if group == GUIDE_KEY:
+                print_menu_groups_guide(console)
+                group = None
+                continue
+
+            if group not in {ALL_TOOLS_KEY, RECENT_KEY, PINNED_KEY, GUIDE_KEY}:
+                write_last_menu_group(group)
+
+        tool = pick_tool(group)
         if tool is None:
-            console.print("[dim]Cancelled.[/dim]")
-            return last_code
+            # Esc on the tool list: one level up, back to groups.
+            group = None
+            continue
 
-        console.print(
-            f"[cyan]→[/cyan] [bold]{tool.name}[/bold]  [dim]{tool.description}[/dim]"
-        )
+        console.print(f"[bold]{breadcrumb(group, tool.name)}[/bold]")
+        if tool.menu_hint and group not in {RECENT_KEY, PINNED_KEY}:
+            console.print(f"[yellow]{tool.menu_hint}[/yellow]")
+        if not confirm_menu_run(tool):
+            continue
+
+        push_recent_tool(tool.name)
+
         last_code = run_tool(tool, forward_args)
 
-        # Tool requested the menu directly (e.g. sf-opp-query "back to de").
+        # Tool asked for the top menu (e.g. sf-opp-query "back to de").
         if last_code == RETURN_TO_MENU_CODE:
             last_code = 0
-            print_banner(console, compact=True)
+            group = None
+            print_banner(console)
             continue
 
-        if ask_return_to_menu():
-            print_banner(console, compact=True)
-            continue
-        return last_code
+        # Stay on this group's tool list. Esc there returns to groups.
+        # Do not ask "Return to de menu?" — that jumps to the top.
 
 
 def run_tool_then_maybe_menu(
@@ -287,7 +409,7 @@ def run_tool_then_maybe_menu(
                 "Run [bold]de[/bold] in a terminal to open the picker."
             )
             return 0
-        return interactive_menu()
+        return interactive_menu(show_banner=False)
     if ask_return_to_menu():
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             console.print(
@@ -295,5 +417,5 @@ def run_tool_then_maybe_menu(
                 "Run [bold]de[/bold] in a terminal to open the picker."
             )
             return code
-        return interactive_menu()
+        return interactive_menu(show_banner=False)
     return code

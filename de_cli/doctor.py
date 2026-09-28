@@ -58,13 +58,16 @@ def run_doctor() -> int:
             str(DE_HOME),
         )
     )
-    checks.append(
-        Check(
-            "de venv python",
-            venv_py.is_file(),
-            str(venv_py) if venv_py.is_file() else "missing — recreate ~/de/.venv",
+    if venv_py.is_file():
+        venv_py_detail = str(venv_py)
+    elif venv_py.is_symlink():
+        venv_py_detail = (
+            f"{venv_py} → {os.readlink(venv_py)} (target deleted) — "
+            f"rebuild ~/de/.venv"
         )
-    )
+    else:
+        venv_py_detail = "missing — recreate ~/de/.venv"
+    checks.append(Check("de venv python", venv_py.is_file(), venv_py_detail))
     try:
         import typer  # noqa: F401
         import rich  # noqa: F401
@@ -121,12 +124,24 @@ def run_doctor() -> int:
 
             binary = resolve_dbt_binary(proj, quiet=True) if ok else None
             if binary is None:
+                detail = (
+                    f"engine={proj.engine} — unresolved "
+                    "(set binary= or install Core/.venv)"
+                )
+                from .dbt_projects import first_broken_binary
+
+                broken = first_broken_binary(proj)
+                if broken is not None:
+                    path, problem = broken
+                    detail = (
+                        f"engine={proj.engine} — {path} exists but {problem}; "
+                        f"rebuild the venv"
+                    )
                 checks.append(
                     Check(
                         f"dbt:{proj.name}:binary",
                         False,
-                        f"engine={proj.engine} — unresolved "
-                        "(set binary= or install Core/.venv)",
+                        detail,
                     )
                 )
             else:
@@ -155,9 +170,33 @@ def run_doctor() -> int:
                 )
 
     # --- CLIs used by registry argv tools + common DE CLIs ---
-    for cli in ("astro", "dbt", "curl", "jq"):
+    for cli in ("astro", "dbt", "curl", "jq", "sigma"):
         path = _which(cli)
-        checks.append(Check(f"cli:{cli}", bool(path), path or "not on PATH"))
+        if cli == "sigma" and not path:
+            home_sigma = Path.home() / ".sigma-cli" / "bin" / "sigma"
+            if home_sigma.is_file():
+                path = str(home_sigma)
+        checks.append(
+            Check(
+                f"cli:{cli}",
+                bool(path),
+                path
+                or (
+                    "not on PATH — brew install sigmacomputing/tap/sigma-computing-cli"
+                    if cli == "sigma"
+                    else "not on PATH"
+                ),
+            )
+        )
+
+    sigma_env = Path.home() / ".config" / "sigma" / "env"
+    checks.append(
+        Check(
+            "config:sigma/env",
+            sigma_env.is_file(),
+            str(sigma_env) if sigma_env.is_file() else f"missing — {sigma_env}",
+        )
+    )
 
     # --- secrets / auth (presence only; do not print secrets) ---
     ft_auth = bool(os.environ.get("FIVETRAN_BASIC_AUTH"))
@@ -204,7 +243,7 @@ def run_doctor() -> int:
     hard_fail = 0
     for c in checks:
         # Optional / informational checks that shouldn't fail the run:
-        soft = c.name in {"env:ASTRO_API_TOKEN", "cli:dbt"}
+        soft = c.name in {"env:ASTRO_API_TOKEN", "cli:dbt", "cli:sigma", "config:sigma/env"}
         if c.ok:
             status = "[green]ok[/green]"
         elif soft:

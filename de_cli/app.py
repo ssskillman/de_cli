@@ -9,6 +9,7 @@ from . import __version__
 from .banner import print_banner
 from .doctor import run_doctor
 from .registry import Tool, find_tool, tools_sorted
+from .menu_guide import print_menu_groups_guide
 from .runner import interactive_menu, list_tools, run_tool_then_maybe_menu
 
 console = Console(stderr=True)
@@ -38,6 +39,7 @@ app = typer.Typer(
         "Examples:\n"
         "  de                         # fzf menu — pick a tool\n"
         "  de --list                  # table of tools + targets\n"
+        "  de groups                  # menu group guide (what Deploy, SFDC, etc. mean)\n"
         "  de doctor                  # env / auth / path health check\n"
         "  de ft -h                   # Fivetran script help (alias for fivetran)\n"
         "  de fivetran --history      # recent Fivetran model runs\n"
@@ -49,8 +51,24 @@ app = typer.Typer(
         "  de dbt --pick run          # fzf pick project, then dbt run\n"
         "  de dbt --help              # underlying dbt CLI help (default project)\n"
         "  de astro-ls                # astro deployment list\n"
+        "  de opp-formula-refresh     # full SF extract + Snowflake MERGE (browser SSO)\n"
+        "  de opp-formula-refresh --limit 10 --open-only --write-snowflake\n"
+        "  de opp-formula-refresh --limit 10 --open-only   # smoke, no Snowflake write\n"
+        "  de customer-health-score   # CHS dry-run; prompts env (sandbox/prod) + limit\n"
+        "  de chs --prod --smoke-test --auth sf-cli --limit 25 "
+        "--snowflake-auth externalbrowser\n"
+        "  de chs --prod --live-write --auth sf-cli --limit 10   # capped prod write\n"
+        "  de chs --smoke-test --sandbox full --auth sf-cli --all\n"
+        "  de daily-pulse             # DE pulse dry-run, last 24h\n"
+        "  de pulse --hours 48        # same, 48h window\n"
         "  de which ft                # print resolved script/CLI path\n"
-        "  de salt-deploy --help      # SALT Firebase deploy help"
+        "  de salt-deploy --help      # SALT Firebase deploy help\n"
+        "  de sigma                   # mint token, then Sigma CLI prompt\n"
+        "  de sigma --help            # Sigma CLI help (after token mint)\n"
+        "  de sigma api workbooks list --params '{\"limit\":20}'\n"
+        "  de sigma-workbooks-list --limit 20\n"
+        "  de sigma-licenses              # fzf menu (summary / report / teams)\n"
+        "  de licenses summary            # billed-tier + account-type matrices"
     ),
     add_completion=False,
     no_args_is_help=False,
@@ -120,8 +138,8 @@ def main(
         console.print(f"de {__version__}")
         raise typer.Exit(0)
 
-    # Splash once per invocation (menu / list / tool commands).
-    print_banner(console, compact=True)
+    # Full splash once per process; menu loops use a one-line header.
+    print_banner(console)
 
     if list_:
         list_tools()
@@ -140,10 +158,17 @@ def list_cmd() -> None:
     list_tools()
 
 
+@app.command("groups")
+def groups_cmd() -> None:
+    """Explain each menu group and which tools belong to it."""
+    print_menu_groups_guide(console)
+    raise typer.Exit(0)
+
+
 @app.command("menu")
 def menu_cmd() -> None:
     """Open the interactive fzf tool picker."""
-    raise typer.Exit(interactive_menu())
+    raise typer.Exit(interactive_menu(show_banner=False))
 
 
 @app.command("which")
@@ -177,5 +202,5 @@ def doctor_cmd() -> None:
     from .runner import ask_return_to_menu
 
     if ask_return_to_menu():
-        raise typer.Exit(interactive_menu())
+        raise typer.Exit(interactive_menu(show_banner=False))
     raise typer.Exit(code)

@@ -16,6 +16,7 @@ _DEFAULT_PATHS = {
     "bi_astronomer": str(Path.home() / "github" / "bi-astronomer"),
     "bi_dbt": str(Path.home() / "github" / "bi-dbt"),
     "bi_react": str(Path.home() / "github" / "bi-react"),
+    "daily_pulse": str(Path.home() / "github" / "daily_pulse"),
 }
 
 
@@ -38,6 +39,18 @@ class Config:
         if p is None:
             raise KeyError(f"No path configured for '{key}' in {CONFIG_PATH}")
         return p
+
+    def snowflake_local_user(self) -> str | None:
+        """Human Snowflake login for browser SSO (not the Airflow service user in .env)."""
+        env = os.environ.get("DE_SNOWFLAKE_LOCAL_USER", "").strip()
+        if env:
+            return env
+        snow = self.raw.get("snowflake") or {}
+        value = snow.get("local_user")
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 _CONFIG: Config | None = None

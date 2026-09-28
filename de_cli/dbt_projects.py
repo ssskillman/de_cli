@@ -138,6 +138,76 @@ def _candidate_core_binaries(project: DbtProject) -> list[Path]:
     ]
 
 
+def interpreter_problem(binary: Path) -> str | None:
+    """Describe a broken `#!` interpreter, or None if the shebang is fine.
+
+    exec() reports a missing interpreter as ENOENT naming the *script*, so a venv
+    whose Python was upgraded away looks like the script itself is missing.
+    """
+    try:
+        with binary.open("rb") as fh:
+            first = fh.readline(512)
+    except OSError:
+        return None
+    if not first.startswith(b"#!"):
+        return None
+    try:
+        parts = shlex.split(first[2:].decode("utf-8", "replace").strip())
+    except ValueError:
+        return None
+    if not parts:
+        return None
+
+    # `#!/usr/bin/env python3` defers resolution to PATH.
+    if Path(parts[0]).name == "env" and len(parts) > 1:
+        if shutil.which(parts[1]):
+            return None
+        return f"interpreter {parts[1]!r} is not on PATH"
+
+    interp = Path(parts[0])
+    if interp.exists():
+        return None
+    if interp.is_symlink():
+        return f"interpreter {interp} → {os.readlink(interp)} (target deleted)"
+    return f"interpreter {interp} is missing"
+
+
+def broken_binary_advice(binary: Path) -> str:
+    """Rebuild instructions for a venv script whose interpreter vanished."""
+    venv = binary.parent.parent
+    if not (venv / "pyvenv.cfg").is_file():
+        return (
+            f"[dim]{binary} is present but unusable — reinstall whatever "
+            f"provides it.[/dim]"
+        )
+    project_root = venv.parent
+    req = project_root / "requirements.txt"
+    install = f"-r {req.name}" if req.is_file() else "dbt-core dbt-snowflake"
+    return (
+        f"[bold]Fix:[/bold] the venv outlived its Python (a Homebrew or pyenv "
+        f"upgrade usually does this). Rebuild it:\n"
+        f"  cd {project_root}\n"
+        f"  rm -rf {venv.name} && uv venv {venv.name} && "
+        f"uv pip install --python {venv.name}/bin/python {install}"
+    )
+
+
+def first_broken_binary(project: DbtProject) -> tuple[Path, str] | None:
+    """First dbt binary for this project that exists but can't exec, with why."""
+    candidates = (
+        [project.binary]
+        if project.binary is not None
+        else _candidate_core_binaries(project)
+    )
+    for candidate in candidates:
+        if candidate is None or not candidate.is_file():
+            continue
+        problem = interpreter_problem(candidate)
+        if problem is not None:
+            return candidate, problem
+    return None
+
+
 def _looks_like_core(binary: Path) -> bool:
     try:
         proc = subprocess.run(
@@ -163,7 +233,15 @@ def resolve_dbt_binary(
     """Return the dbt executable for this project, or None."""
     if project.binary is not None:
         if project.binary.is_file() and os.access(project.binary, os.X_OK):
-            return project.binary
+            problem = interpreter_problem(project.binary)
+            if problem is None:
+                return project.binary
+            if not quiet:
+                console.print(
+                    f"[red]ERROR:[/red] {project.binary} cannot run — {problem}\n"
+                    f"{broken_binary_advice(project.binary)}"
+                )
+            return None
         if not quiet:
             console.print(
                 f"[red]ERROR:[/red] configured binary not found/executable: "
@@ -174,20 +252,34 @@ def resolve_dbt_binary(
     engine = project.engine
 
     if engine in ("core", "auto"):
+        broken: list[tuple[Path, str]] = []
         for candidate in _candidate_core_binaries(project):
             if candidate.is_file() and os.access(candidate, os.X_OK):
+                problem = interpreter_problem(candidate)
+                if problem is not None:
+                    broken.append((candidate, problem))
+                    continue
                 if engine == "core" or _looks_like_core(candidate):
                     return candidate
         if engine == "core":
             if not quiet:
-                looked = "\n  ".join(str(p) for p in _candidate_core_binaries(project))
-                console.print(
-                    f"[red]ERROR:[/red] no dbt Core binary found for project "
-                    f"[bold]{project.name}[/bold].\n"
-                    f"Set [bold]\\[dbt.projects.{project.name}].binary[/bold] "
-                    f"to your venv dbt (e.g. ~/UDI/.venv/bin/dbt).\n"
-                    f"Looked in:\n  {looked}"
-                )
+                if broken:
+                    path, problem = broken[0]
+                    console.print(
+                        f"[red]ERROR:[/red] {path} cannot run — {problem}\n"
+                        f"{broken_binary_advice(path)}"
+                    )
+                else:
+                    looked = "\n  ".join(
+                        str(p) for p in _candidate_core_binaries(project)
+                    )
+                    console.print(
+                        f"[red]ERROR:[/red] no dbt Core binary found for project "
+                        f"[bold]{project.name}[/bold].\n"
+                        f"Set [bold]\\[dbt.projects.{project.name}].binary[/bold] "
+                        f"to your venv dbt (e.g. ~/UDI/.venv/bin/dbt).\n"
+                        f"Looked in:\n  {looked}"
+                    )
             return None
 
     # cloud (or auto with no local Core) → prefer Homebrew Cloud CLI, else PATH
@@ -419,11 +511,30 @@ def resolve_project(
     return fzf_pick_project()
 
 
+def strip_leading_dbt(args: list[str]) -> list[str]:
+    """Drop a pasted `dbt` binary token so `dbt build …` and `build …` both work."""
+    if args and args[0].lower() == "dbt":
+        return args[1:]
+    return args
+
+
 def prompt_dbt_command(project: DbtProject) -> list[str] | None:
     """Interactive: pick a common command or type custom dbt args."""
     presets: list[tuple[str, str]] = []
     if project.name.lower() == "udi":
         presets = [
+            (
+                "udi-full-refresh",
+                "build --full-refresh",
+            ),
+            (
+                "udi-run-full-refresh",
+                "run --full-refresh",
+            ),
+            (
+                "udi-wave1-full-refresh",
+                'build --select "tag:phase_b" --full-refresh',
+            ),
             (
                 "udi-account-full-refresh",
                 "build --select stg_sfdc_account --full-refresh",
@@ -485,13 +596,20 @@ def prompt_dbt_command(project: DbtProject) -> list[str] | None:
         console.print(
             "[dim]Example:[/dim] build --select stg_sfdc_account --full-refresh"
         )
+        console.print(
+            "[dim]Paste with or without a leading[/dim] [bold]dbt[/bold][dim].[/dim]"
+        )
         sys.stderr.write(f"dbt {project.name} args> ")
         sys.stderr.flush()
         line = sys.stdin.readline()
         if not line or not line.strip():
             console.print("[dim]Cancelled (empty args).[/dim]")
             return None
-        return shlex.split(line.strip())
+        parsed = strip_leading_dbt(shlex.split(line.strip()))
+        if not parsed:
+            console.print("[dim]Cancelled (empty args after dropping 'dbt').[/dim]")
+            return None
+        return parsed
 
     for key, cmd in presets:
         if key == chosen:
@@ -537,4 +655,4 @@ def parse_dbt_args(
             continue
         remaining.append(a)
         i += 1
-    return remaining, project, pick, False
+    return strip_leading_dbt(remaining), project, pick, False
