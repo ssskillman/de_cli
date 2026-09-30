@@ -190,7 +190,7 @@ TOOLS: tuple[Tool, ...] = (
             "and Quickstart jobs; Enter runs the one you pick."
         ),
         menu_summary="Run transformations",
-        menu_hint="Enter runs the highlighted job. Paused jobs are skipped unless you pass --force.",
+        menu_hint="Enter runs the job. Right arrow shows the latest run log tail.",
         script=str(Path.home() / "de" / "fivetran_transformations.sh"),
         aliases=("ft-run", "transformations"),
         category="fivetran",

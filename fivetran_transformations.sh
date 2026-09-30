@@ -4,8 +4,9 @@
 # Lists dbt Core and Quickstart jobs from the Fivetran API (names match the
 # Transformations UI), then POSTs /v1/transformations/{id}/run.
 #
-#   fivetran_transformations.sh                         # fzf, Enter runs
+#   fivetran_transformations.sh                         # fzf, Enter runs, → log tail
 #   fivetran_transformations.sh list
+#   fivetran_transformations.sh log ID
 #   fivetran_transformations.sh run NAME_OR_ID [--yes] [--full-refresh] [--force]
 #
 # Requires FIVETRAN_BASIC_AUTH (base64 of API key:secret), curl, and python3.
@@ -22,9 +23,13 @@ usage() {
 Usage:
   fivetran_transformations.sh
       Interactive fzf. Enter runs the highlighted transformation.
+      Right arrow shows the tail of the latest run log.
 
   fivetran_transformations.sh list
       Print name, type, status, and destination.
+
+  fivetran_transformations.sh log ID
+      Print the tail of the latest succeeded or failed run.
 
   fivetran_transformations.sh run NAME_OR_ID [--yes] [--full-refresh] [--force]
 
@@ -52,27 +57,34 @@ list_rows() {
   FIVETRAN_BASIC_AUTH="$FIVETRAN_BASIC_AUTH" \
   LIST_HUMAN="${LIST_HUMAN:-0}" \
   python3 - <<'PY'
-import json, os, sys, urllib.error, urllib.parse, urllib.request
+import json, os, sys, time, urllib.error, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 auth = os.environ["FIVETRAN_BASIC_AUTH"]
 human = os.environ.get("LIST_HUMAN") == "1"
 NAME_W, TYPE_W, STATUS_W = 36, 12, 10
 
-def api(path):
-    req = urllib.request.Request(
-        "https://api.fivetran.com/v1" + path,
-        headers={
-            "Authorization": "Basic " + auth,
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.load(resp)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace")[:300]
-        raise SystemExit(f"Fivetran {path} failed: {exc.code} {body}") from exc
+def api(path, attempts=3):
+    last = None
+    for attempt in range(attempts):
+        req = urllib.request.Request(
+            "https://api.fivetran.com/v1" + path,
+            headers={
+                "Authorization": "Basic " + auth,
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:300]
+            raise SystemExit(f"Fivetran {path} failed: {exc.code} {body}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last = exc
+            if attempt + 1 < attempts:
+                time.sleep(0.4 * (attempt + 1))
+    raise SystemExit(f"Fivetran {path} failed: {last}")
 
 def pages(path):
     items, cursor = [], None
@@ -129,7 +141,14 @@ for data in details:
             conn_ids.append(ids[0])
 
 def connection(cid):
-    data = api("/connections/" + urllib.parse.quote(cid)).get("data") or {}
+    # A failed connector lookup must not abort the list. The row falls back
+    # to the Quickstart package name.
+    if not isinstance(cid, str) or not cid:
+        return cid, {}
+    try:
+        data = api("/connections/" + urllib.parse.quote(cid, safe="")).get("data") or {}
+    except SystemExit:
+        return cid, {}
     return cid, data
 
 conns = {}
@@ -190,7 +209,10 @@ pick_key() {
       --with-nth=2 \
       --prompt="$prompt" \
       --header="$header" \
-      --pointer='▶'); then
+      --pointer='▶' \
+      --preview-window='right:58%:wrap:hidden' \
+      --preview "$0 log {1}" \
+      --bind='right:toggle-preview'); then
       return 1
     fi
     printf '%s' "$sel"
@@ -283,13 +305,143 @@ print("status:", d.get("status") or "accepted")
   rm -f "$tmp"
 }
 
+# Tail of the latest finished run. Fivetran does not return this from the REST
+# API; the platform connector stores it in FIVETRAN_DB.FIVETRAN_LOG.LOG
+# (message_data.result.stepResults[].commandResult.output).
+print_log() {
+  local id="$1"
+  local cache="${HOME}/.cache/de/ft-logs/${id}"
+  if [[ -f "$cache" ]]; then
+    local age=$(( $(date +%s) - $(stat -f %m "$cache") ))
+    if [[ "$age" -lt 180 ]]; then
+      cat "$cache"
+      return 0
+    fi
+  fi
+  local py="$HOME/github/udi-dbt/.venv/bin/python"
+  if [[ ! -x "$py" ]]; then
+    py=$(command -v python3)
+  fi
+  local tmp
+  tmp=$(mktemp)
+  if ! TRANSFORMATION_ID="$id" "$py" - >"$tmp" <<'PY'
+import contextlib, io, json, os, sys
+from pathlib import Path
+
+tid = os.environ["TRANSFORMATION_ID"]
+try:
+    import snowflake.connector
+    import yaml
+except ImportError:
+    print("Snowflake client is not available (udi-dbt .venv).")
+    raise SystemExit(1)
+
+profile_path = Path.home() / ".dbt" / "profiles.yml"
+profile = yaml.safe_load(profile_path.read_text())
+udi = profile["udi"]
+out = udi["outputs"][udi.get("target") or "dev"]
+
+buf = io.StringIO()
+try:
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        conn = snowflake.connector.connect(
+            account=out["account"],
+            user=out["user"],
+            role=out.get("role"),
+            warehouse=out.get("warehouse"),
+            database="FIVETRAN_DB",
+            schema="FIVETRAN_LOG",
+            authenticator=out.get("authenticator") or "externalbrowser",
+            login_timeout=25,
+            client_store_temporary_credential=True,
+        )
+except Exception as exc:
+    print(f"Snowflake login failed: {exc}")
+    raise SystemExit(1)
+
+sql = """
+SELECT
+  message_event,
+  TO_VARCHAR(time_stamp, 'YYYY-MM-DD HH24:MI:SS') AS ts,
+  PARSE_JSON(message_data):name::string AS name,
+  PARSE_JSON(message_data):result:description::string AS summary,
+  PARSE_JSON(message_data):result:stepResults AS steps
+FROM FIVETRAN_DB.FIVETRAN_LOG.LOG
+WHERE time_stamp >= DATEADD(day, -14, CURRENT_TIMESTAMP())
+  AND message_event IN ('transformation_succeeded', 'transformation_failed')
+  AND PARSE_JSON(message_data):id::string = %s
+ORDER BY time_stamp DESC
+LIMIT 1
+"""
+try:
+    cur = conn.cursor()
+    cur.execute(sql, (tid,))
+    row = cur.fetchone()
+finally:
+    conn.close()
+
+if not row:
+    print(
+        "No finished log for this transformation in the last 14 days.\n"
+        "Fivetran writes it to FIVETRAN_DB.FIVETRAN_LOG.LOG after the platform connector syncs."
+    )
+    raise SystemExit(0)
+
+event, ts, name, summary, steps = row
+if isinstance(steps, str):
+    steps = json.loads(steps)
+chunks = []
+for step in steps or []:
+    result = (step or {}).get("commandResult") or {}
+    text = result.get("output") or result.get("error") or ""
+    if text:
+        chunks.append(text.rstrip("\n"))
+body = "\n".join(chunks)
+lines = body.splitlines()
+tail = lines[-80:]
+label = {"transformation_succeeded": "succeeded", "transformation_failed": "failed"}.get(event, event)
+print(f"{name or tid}  {label}  {ts}")
+if summary:
+    print(summary)
+if len(lines) > len(tail):
+    print(f"… {len(lines) - len(tail)} earlier lines omitted")
+print()
+print("\n".join(tail) if tail else "(log had no command output)")
+PY
+  then
+    cat "$tmp"
+    rm -f "$tmp"
+    return 1
+  fi
+  mkdir -p "${HOME}/.cache/de/ft-logs"
+  if grep -q '  succeeded  \|  failed  ' "$tmp"; then
+    cp "$tmp" "$cache"
+  fi
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
 interactive() {
-  local cols sel id name status
-  cols=$(printf '%-36s  %-12s  %-10s  %s' "Name" "Type" "Status" "Destination")
+  local cols sel id name status tries=0
+    cols=$(printf '%-36s  %-12s  %-10s  %s  ·  Enter run  ·  → log' "Name" "Type" "Status" "Destination")
   while true; do
     echo "Loading Fivetran transformations..." >&2
     local rows
-    rows=$(list_rows) || return 1
+    if ! rows=$(list_rows); then
+      tries=$((tries + 1))
+      if [[ "$tries" -ge 3 ]]; then
+        echo "Still cannot load transformations." >&2
+        local answer
+        read -r -p "Retry? [Y/n] " answer </dev/tty || return 0
+        [[ "$answer" == "n" || "$answer" == "N" ]] && return 0
+        tries=0
+      else
+        echo "Could not reload transformations. Retrying..." >&2
+        sleep 1
+      fi
+      continue
+    fi
+    tries=0
     if ! sel=$(printf '%s\n' "$rows" | pick_key "$cols  ·  Esc back" "run > "); then
       return 0
     fi
@@ -312,7 +464,7 @@ while [[ $# -gt 0 ]]; do
     --yes|-y) YES="true"; shift ;;
     --full-refresh) FULL_REFRESH="true"; shift ;;
     --force) FORCE="true"; shift ;;
-    list|run) break ;;
+    list|run|log) break ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
 done
@@ -333,6 +485,10 @@ case "$cmd" in
     echo "Loading Fivetran transformations..." >&2
     printf '%-36s  %-12s  %-10s  %s\n' "Name" "Type" "Status" "Destination"
     LIST_HUMAN=1 list_rows
+    ;;
+  log)
+    [[ $# -eq 1 ]] || die "log needs a transformation id"
+    print_log "$1"
     ;;
   run)
     [[ $# -ge 1 ]] || die "run needs a transformation name or id"
