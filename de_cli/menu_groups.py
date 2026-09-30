@@ -12,7 +12,7 @@ MENU_GROUPS: tuple[tuple[str, str], ...] = (
     ("local", "Local bi-astronomer runners + daily pulse (laptop)"),
     ("deploy", "SALT & Netlify production app deploys"),
     ("dbt", "dbt Core / Cloud in configured projects"),
-    ("fivetran", "Fivetran individual model runs"),
+    ("fivetran", "Individual model runs and transformation runs"),
 )
 
 _CATEGORY_TO_GROUP: dict[str, str] = {

@@ -184,6 +184,18 @@ TOOLS: tuple[Tool, ...] = (
         category="fivetran",
     ),
     Tool(
+        name="fivetran-transformations",
+        description=(
+            "Run a Fivetran transformation. No args opens an fzf of dbt Core "
+            "and Quickstart jobs; Enter runs the one you pick."
+        ),
+        menu_summary="Run transformations",
+        menu_hint="Enter runs the highlighted job. Paused jobs are skipped unless you pass --force.",
+        script=str(Path.home() / "de" / "fivetran_transformations.sh"),
+        aliases=("ft-run", "transformations"),
+        category="fivetran",
+    ),
+    Tool(
         name="netlify-prod-deploy",
         description="Build + Netlify prod deploy for salt_app (cd salt_app && netlify_prod_deploy)",
         menu_summary="Netlify prod deploy for salt_app",

@@ -43,8 +43,8 @@ GROUP_BLURBS: dict[str, str] = {
         "(-p project, --pick, or forward any dbt args)."
     ),
     "fivetran": (
-        "Fivetran individual model run helper with interactive dbt model selection "
-        "in bi-astronomer."
+        "Fivetran individual model runs, and a picker to run any dbt Core "
+        "or Quickstart transformation."
     ),
 }
 

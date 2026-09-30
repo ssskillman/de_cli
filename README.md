@@ -26,6 +26,8 @@ de --list
 de doctor                  # fzf, venv, paths, astro auth, Fivetran env
 de astro-dags [args...]
 de fivetran [args...]
+de fivetran-transformations      # fzf: pick a transformation, Enter runs it
+de transformations list          # name / type / status / destination
 de sf-opp-query            # SF Opp SOQL — human/csv/json (+ --pin)
 de opp-formula-refresh --limit 10 --open-only --write-snowflake
 de netlify-prod-deploy     # cd salt_app && netlify_prod_deploy
