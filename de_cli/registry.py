@@ -211,6 +211,18 @@ TOOLS: tuple[Tool, ...] = (
         category="fivetran",
     ),
     Tool(
+        name="fivetran-running",
+        description=(
+            "List Fivetran transformations and connectors that are running. "
+            "Right arrow shows the platform log for the highlighted job."
+        ),
+        menu_summary="Running transformations and connectors",
+        menu_hint="Right arrow shows the log. Nothing is started.",
+        script=str(Path.home() / "de" / "fivetran_running.sh"),
+        aliases=("ft-running", "fivetran-live"),
+        category="fivetran",
+    ),
+    Tool(
         name="netlify-prod-deploy",
         description="Build + Netlify prod deploy for salt_app (cd salt_app && netlify_prod_deploy)",
         menu_summary="Netlify prod deploy for salt_app",
