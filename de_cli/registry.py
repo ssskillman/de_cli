@@ -275,6 +275,18 @@ TOOLS: tuple[Tool, ...] = (
         category="local",
     ),
     Tool(
+        name="git-repo-check",
+        description=(
+            "Scan local git clones (default ~/github) and print each branch "
+            "ahead/behind its base. Fetches before comparing."
+        ),
+        menu_summary="Scan ~/github clones: branch ahead/behind",
+        menu_hint="Fetches each repo. Pass a path to scan somewhere else.",
+        script=str(Path.home() / "bin" / "git_repo_check.sh"),
+        aliases=("git-repos", "repo-check", "repos"),
+        category="local",
+    ),
+    Tool(
         name="salt-deploy",
         description="Build/deploy salt_app_gcp Firebase preview (deploy_salt_gcp)",
         menu_summary="SALT GCP Firebase preview deploy",

@@ -36,7 +36,8 @@ GROUP_BLURBS: dict[str, str] = {
     ),
     "local": (
         "Local bi-astronomer scripts (not scheduled in Astro): AirOps, order sync, "
-        "and Outlook SNDS. Safe for laptop dry-runs."
+        "and Outlook SNDS. git-repo-check fetches clones under ~/github and "
+        "prints how far each branch is ahead or behind its base."
     ),
     "deploy": (
         "Production app deploys: SALT GCP Firebase preview and Netlify prod for "
