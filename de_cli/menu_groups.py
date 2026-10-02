@@ -9,7 +9,8 @@ MENU_GROUPS: tuple[tuple[str, str], ...] = (
     ("sfdc", "Opportunity formulas, CHS → SFDC, SOQL"),
     ("sigma", "Sigma CLI, licenses, workbooks, datasets, user admin"),
     ("airflow", "Astro deployments, DAG deploy, DAG control, user access"),
-    ("local", "Local bi-astronomer runners + daily pulse (laptop)"),
+    ("bi_apps", "Daily Pulse and other bi-applications monorepo tools"),
+    ("local", "Local bi-astronomer runners (laptop)"),
     ("deploy", "SALT & Netlify production app deploys"),
     ("dbt", "dbt Core / Cloud in configured projects"),
     ("fivetran", "Individual model runs and transformation runs"),
@@ -24,6 +25,7 @@ _CATEGORY_TO_GROUP: dict[str, str] = {
     "salesforce": "sfdc",
     "sigma": "sigma",
     "deploy": "deploy",
+    "bi_apps": "bi_apps",
     "general": "local",
 }
 
@@ -38,6 +40,11 @@ _TOOL_TO_GROUP: dict[str, str] = {
     "netlify": "deploy",
     "salt-deploy": "deploy",
     "salt": "deploy",
+    "daily-pulse": "bi_apps",
+    "daily-pulse-smoke-est": "bi_apps",
+    "pulse": "bi_apps",
+    "de-pulse": "bi_apps",
+    "pulse-smoke": "bi_apps",
 }
 
 
@@ -59,6 +66,7 @@ def menu_group_label(key: str) -> str:
         "dbt": "dbt",
         "sfdc": "SFDC",
         "sigma": "Sigma",
+        "bi_apps": "BI Apps",
         ALL_TOOLS_KEY: "All tools",
         RECENT_KEY: "Recent",
         PINNED_KEY: "Pinned",

@@ -140,14 +140,29 @@ TOOLS: tuple[Tool, ...] = (
         name="daily-pulse",
         description=(
             "DE Daily Pulse (Jira/Airflow/Snowflake/GitHub digest). "
-            "Always --dry-run; no args = --hours 24."
+            "Always --dry-run; no args = --dry-run --hours 24."
         ),
-        script=str(Path.home() / "de" / "daily_pulse.sh"),
-        cwd_root="daily_pulse",
+        script="scripts/run-local.sh",
+        root="bi_applications",
         aliases=("pulse", "de-pulse"),
-        category="ops",
-        default_args=("--hours", "24"),
+        category="bi_apps",
+        default_args=("--dry-run", "--hours", "24"),
         menu_summary="DE digest: Jira, Airflow, Snowflake, GitHub (dry-run, 24h)",
+    ),
+    Tool(
+        name="daily-pulse-smoke-est",
+        description=(
+            "DE Daily Pulse smoke: collect + post to #daily_pulse_est "
+            "(config/de.personal.yaml when present). No args = --hours 24."
+        ),
+        menu_summary="Post DE digest to #daily_pulse_est (smoke, 24h)",
+        menu_hint="Needs SLACK_BOT_TOKEN in bi-applications .env",
+        script="scripts/run-local.sh",
+        root="bi_applications",
+        aliases=("pulse-smoke",),
+        category="bi_apps",
+        default_args=("--smoke-est", "--hours", "24"),
+        menu_requires_confirm=True,
     ),
     Tool(
         name="customer-health-score",

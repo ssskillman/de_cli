@@ -29,14 +29,12 @@ def confirm_menu_run(tool: Tool) -> bool:
     )
     if tool.menu_hint:
         console.print(f"[yellow]{tool.menu_hint}[/yellow]")
-    console.print(
-        f"Type [bold]{tool.name}[/bold] to run, or anything else to cancel:"
-    )
+    console.print("[dim]Press Enter to run, or N to cancel.[/dim]")
     try:
-        answer = input("> ").strip()
+        answer = input("> ").strip().casefold()
     except (EOFError, KeyboardInterrupt):
         return False
-    if answer != tool.name:
+    if answer in {"n", "no"}:
         console.print("[dim]Cancelled.[/dim]")
         return False
     return True

@@ -17,6 +17,7 @@ _DEFAULT_PATHS = {
     "bi_dbt": str(Path.home() / "github" / "bi-dbt"),
     "bi_react": str(Path.home() / "github" / "bi-react"),
     "daily_pulse": str(Path.home() / "github" / "daily_pulse"),
+    "bi_applications": str(Path.home() / "github" / "bi-applications"),
 }
 
 

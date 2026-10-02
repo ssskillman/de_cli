@@ -30,9 +30,13 @@ GROUP_BLURBS: dict[str, str] = {
         "the interactive DAG control center (trigger runs, watch logs), "
         "and workspace or deployment user access."
     ),
+    "bi_apps": (
+        "skillman-iterable/bi_applications: DE Daily Pulse (dry-run or smoke post "
+        "to #daily_pulse_est). Uses scripts/run-local.sh and repo .env layers."
+    ),
     "local": (
         "Local bi-astronomer scripts (not scheduled in Astro): AirOps, order sync, "
-        "Outlook SNDS, and the DE daily pulse digest. Safe for laptop dry-runs."
+        "and Outlook SNDS. Safe for laptop dry-runs."
     ),
     "deploy": (
         "Production app deploys: SALT GCP Firebase preview and Netlify prod for "

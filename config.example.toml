@@ -6,6 +6,7 @@ bi_astronomer = "/Users/shawn.skillman/github/bi-astronomer"
 bi_dbt = "/Users/shawn.skillman/github/bi-dbt"
 bi_react = "/Users/shawn.skillman/github/bi-react"
 udi_dbt = "/Users/shawn.skillman/UDI/dbt"
+bi_applications = "/Users/shawn.skillman/github/bi-applications"
 
 [defaults]
 # Used by future commands; astro-dags still accepts dev|prod on the CLI.
