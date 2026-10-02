@@ -30,6 +30,9 @@ def _fzf_pick(lines: list[str], *, header: str, prompt: str) -> str | None:
             "--marker=◉ ",
             f"--header={header}",
             "--info=inline",
+            # Up on the first row jumps to the last, and Down on the last jumps to the first.
+            '--bind=up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up',
+            '--bind=down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down',
         ],
         input="\n".join(lines) + "\n",
         text=True,

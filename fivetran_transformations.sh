@@ -212,7 +212,9 @@ pick_key() {
       --pointer='▶' \
       --preview-window='right:58%:wrap:hidden' \
       --preview "$0 log {1}" \
-      --bind='right:toggle-preview'); then
+      --bind='right:toggle-preview' \
+      --bind='up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up' \
+      --bind='down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down'); then
       return 1
     fi
     printf '%s' "$sel"
