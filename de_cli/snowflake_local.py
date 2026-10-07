@@ -18,6 +18,9 @@ _SNOWFLAKE_SSO_TOOLS = frozenset(
         "chs",
         "account-health",
         "health-score",
+        "sigma-license-audit",
+        "sigma-audit",
+        "departed-licenses",
     }
 )
 

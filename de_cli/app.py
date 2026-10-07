@@ -44,6 +44,7 @@ app = typer.Typer(
         "  de ft -h                   # Fivetran script help (alias for fivetran)\n"
         "  de fivetran --history      # recent Fivetran model runs\n"
         "  de astro-dags dev          # DAG picker on the dev deployment\n"
+        "  de astro-dags prod --runs failed   # browse failed runs, stream task logs\n"
         "  de dags prod outlook       # alias: prefill DAG fuzzy query\n"
         "  de dbt projects            # list configured local dbt projects\n"
         "  de dbt run --select foo    # dbt in default project (config)\n"
@@ -68,7 +69,9 @@ app = typer.Typer(
         "  de sigma api workbooks list --params '{\"limit\":20}'\n"
         "  de sigma-workbooks-list --limit 20\n"
         "  de sigma-licenses              # fzf menu (summary / report / teams)\n"
-        "  de licenses summary            # billed-tier + account-type matrices"
+        "  de licenses summary            # billed-tier + account-type matrices\n"
+        "  de sigma-audit --summary       # audit licenses vs Snowflake ADP terminations\n"
+        "  de sigma-audit --paid-only --active-only  # list departed users on paid seats"
     ),
     add_completion=False,
     no_args_is_help=False,

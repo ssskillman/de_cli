@@ -96,7 +96,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="astro-dags",
         description="Astro DAG control center — pick, trigger, and watch DAG runs",
-        menu_summary="Pick a DAG, trigger runs, watch task logs (Astro)",
+        menu_summary="Pick/trigger DAGs; --runs browses success/failed/running logs",
         script="scripts/astro_dags.sh",
         root="bi_astronomer",
         aliases=("astro", "dags"),
@@ -351,6 +351,21 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sigma-user-deactivate", "deactivate-sigma-user"),
     ),
     Tool(
+        name="sigma-license-audit",
+        description=(
+            "Audit Sigma licenses vs Snowflake ADP employee terminations: "
+            "identify departed staff holding paid seats, reclaim licenses, downgrade or deactivate"
+        ),
+        menu_summary="Audit Sigma licenses vs ADP terminations (reclaim paid seats)",
+        menu_hint="Dry-run default · --execute applies downgrades or deactivations",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_license_audit.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-audit", "sigma-offboard", "departed-licenses"),
+    ),
+    Tool(
         name="sigma-licenses",
         description=(
             "Sigma license inventory — summary, report, teams, deactivate "
@@ -375,6 +390,33 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sigma-wb-list",),
     ),
     Tool(
+        name="sigma-move-workbooks",
+        description=(
+            "Move selected Sigma workbooks between folders/workspaces. "
+            "No args → fzf browse source/dest folders, pick workbooks, owner, confirm."
+        ),
+        menu_summary="URL or fzf folders; pick workbooks; destination; confirm move",
+        menu_hint="PATCHes Sigma inode parentId/ownerId — confirm inside the wizard",
+        script=str(Path.home() / "de" / "scripts" / "sigma_move_workbooks.py"),
+        category="sigma",
+        aliases=("sigma-move-wb", "move-sigma-workbooks"),
+    ),
+    Tool(
+        name="sigma-reassign-workbook",
+        description=(
+            "Transfer ownership of exactly one Sigma workbook. "
+            "Paste its URL or inode ID, pick the new owner, review, and confirm."
+        ),
+        menu_summary="Transfer one workbook to a new owner",
+        menu_hint="One workbook only · pick owner by email · confirms before PATCH",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_reassign_workbook.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-transfer-workbook", "reassign-workbook"),
+    ),
+    Tool(
         name="sigma-bi-dashboards",
         description=(
             "BI-owned Sigma workbooks as JSON/CSV: team, dashboard URL, endorsed, "
@@ -387,6 +429,54 @@ TOOLS: tuple[Tool, ...] = (
         ),
         category="sigma",
         aliases=("sigma-bi-inventory", "bi-dashboards"),
+    ),
+    Tool(
+        name="slack-faq-import",
+        description=(
+            "Import Slack workspace export zip/folder into messages.csv "
+            "(no API token; use after admin export)"
+        ),
+        menu_summary="Import Slack export zip → messages.csv for FAQ report",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "slack_export_import.py"),
+        ),
+        category="local",
+        aliases=("slack-export-import", "slack-faq-ingest"),
+    ),
+    Tool(
+        name="slack-faq-sync",
+        description=(
+            "Incremental Slack channel export for FAQ mining "
+            "(conversations.history + replies; default channel C01V64XA4AK)"
+        ),
+        menu_summary="Sync Slack channel messages to local CSV",
+        menu_hint="Needs ~/.config/de/slack.env SLACK_BOT_TOKEN; bot must be in channel",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "slack_channel_sync.py"),
+        ),
+        category="local",
+        aliases=("slack-sync", "slack-faq-export"),
+    ),
+    Tool(
+        name="slack-faq-report",
+        description="FAQ frequency CSVs from synced Slack messages (faq_report, by week)",
+        menu_summary="Build FAQ report from local Slack export",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "slack_faq_report.py"),
+        ),
+        category="local",
+        aliases=("slack-faq", "slack-questions"),
+    ),
+    Tool(
+        name="slack-faq-daily",
+        description="Daily Slack FAQ job: sync channel then regenerate FAQ CSVs",
+        menu_summary="Daily Slack sync + FAQ report",
+        script=str(Path.home() / "de" / "scripts" / "slack_faq_daily.sh"),
+        category="local",
+        aliases=("slack-faq-pipeline",),
     ),
     Tool(
         name="sf-opp-query",
