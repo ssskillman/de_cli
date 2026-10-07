@@ -670,6 +670,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--archive-docs", action="store_true", help="Archive documents instead of transferring to --new-owner.")
     parser.add_argument("--execute", action="store_true", help="Execute mutations (default is dry-run preview).")
     parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt with --execute.")
+    parser.add_argument("--one-by-one", action="store_true", help="Prompt to confirm remediation one user at a time.")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive menu mode.")
     return parser.parse_args()
 
@@ -683,6 +684,7 @@ def run_remediation_plan(
     archive_docs: bool,
     execute: bool,
     auto_confirm: bool,
+    one_by_one: bool = False,
 ) -> int:
     if not targets:
         print("No target members selected for remediation.")
@@ -703,6 +705,51 @@ def run_remediation_plan(
             print(f"ERROR: Destination owner {new_owner_email!r} is not an active Sigma user.", file=sys.stderr)
             return 1
         new_owner_id = owner["memberId"]
+
+    # One-by-one interactive confirmation flow
+    if one_by_one:
+        mode_str = "LIVE EXECUTE" if execute else "DRY-RUN PREVIEW"
+        dest_str = "archive" if archive_docs else (new_owner_email or "none")
+        print(f"\nOne-by-one remediation [{mode_str}] (docs -> {dest_str}):")
+        count = 0
+        for idx, t in enumerate(targets, 1):
+            tier_info = f"{t.license_type} ({t.member_type})"
+            term_info = f"Terminated: {t.termination_date}" if t.termination_date else "Departed"
+            actions = []
+            if downgrade and t.license_type != "View":
+                actions.append("downgrade to View")
+            if deactivate:
+                actions.append(f"deactivate (docs -> {dest_str})")
+            action_desc = " & ".join(actions) or "no-op"
+
+            print(f"\n[{idx}/{len(targets)}] {t.full_name} <{t.email}> [{tier_info}, {term_info}]")
+            ans = input(f"Action: {action_desc}? [y/N/q]: ").strip().lower()
+            if ans in ("q", "quit", "exit"):
+                print("Exited one-by-one flow.")
+                break
+            if ans in ("y", "yes"):
+                if execute:
+                    if downgrade:
+                        client.update_member_type(t.member_id, "View")
+                        t.member_type = "View"
+                        t.license_type = "View"
+                        t.is_paid = False
+                        print(f"  ✓ Downgraded {t.email} -> View")
+                    if deactivate:
+                        client.deactivate_member(t.member_id, new_owner_id=new_owner_id, archive_docs=archive_docs)
+                        t.sigma_status = "deactivated"
+                        t.is_archived = True
+                        t.is_paid = False
+                        t.risk_level = "CLEAN"
+                        print(f"  ✓ Deactivated {t.email}")
+                else:
+                    print(f"  [DRY-RUN] Simulated: {action_desc} for {t.email}")
+                count += 1
+            else:
+                print("  Skipped.")
+
+        print(f"\nCompleted one-by-one flow. Processed {count} user(s).")
+        return 0
 
     plan = []
     for t in targets:
@@ -736,37 +783,115 @@ def run_remediation_plan(
             print("Aborted.")
             return 0
 
-    # Execute
+    # Execute batch
     for item in plan:
         mid = item["memberId"]
         email = item["email"]
+        t = next((x for x in targets if x.member_id == mid), None)
         if downgrade:
             client.update_member_type(mid, "View")
+            if t:
+                t.member_type = "View"
+                t.license_type = "View"
+                t.is_paid = False
             print(f"Downgraded {email} -> View")
         if deactivate:
             client.deactivate_member(mid, new_owner_id=new_owner_id, archive_docs=archive_docs)
+            if t:
+                t.sigma_status = "deactivated"
+                t.is_archived = True
+                t.is_paid = False
+                t.risk_level = "CLEAN"
             print(f"Deactivated {email}")
 
     print(f"\nSuccessfully executed remediation on {len(plan)} user(s).")
     return 0
 
 
-def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> int:
-    departed = [r for r in records if r.is_departed]
-    departed_active_paid = [r for r in departed if r.sigma_status == "active" and r.is_paid]
+def interactive_deactivate_one_by_one(records: list[MemberAuditRecord], client: SigmaClient) -> None:
+    print("\nSelect target group for one-by-one deactivation:")
+    print("  1. Active departed users with PAID licenses (CRITICAL seats)")
+    print("  2. Pick specific user by email or name")
+    print("  3. All active departed users in Sigma")
+    print("  q. Cancel")
 
+    sel = input("\nChoice [1-3, q]: ").strip().lower()
+    if sel in ("q", "quit", "exit", ""):
+        return
+
+    if sel == "1":
+        targets = [r for r in records if r.is_departed and r.sigma_status == "active" and r.is_paid]
+    elif sel == "2":
+        q = input("Search email or name: ").strip().lower()
+        if not q:
+            return
+        matches = [r for r in records if q in r.email.lower() or q in r.full_name.lower()]
+        if not matches:
+            print("No matching users found.")
+            return
+        if len(matches) == 1:
+            targets = matches
+        else:
+            print(f"\nFound {len(matches)} matches:")
+            for i, m in enumerate(matches, 1):
+                print(f"  {i}. {m.full_name} <{m.email}> [{m.license_type}, {m.sigma_status}]")
+            pick = input(f"Pick user [1-{len(matches)}, q]: ").strip()
+            if not pick.isdigit() or not (1 <= int(pick) <= len(matches)):
+                return
+            targets = [matches[int(pick) - 1]]
+    elif sel == "3":
+        targets = [r for r in records if r.is_departed and r.sigma_status == "active"]
+    else:
+        print("Invalid choice.")
+        return
+
+    if not targets:
+        print("No matching active users found to deactivate.")
+        return
+
+    targets.sort(key=lambda r: (r.full_name.casefold(), r.email.casefold()))
+
+    owner = input("\nEnter destination email for reassigned documents (or 'archive' to archive docs): ").strip()
+    if not owner:
+        print("Cancelled.")
+        return
+
+    archive_docs = owner.lower() == "archive"
+    new_owner_email = None if archive_docs else owner
+
+    mode = input("Execute live or dry-run? [dry-run/live] (default: dry-run): ").strip().lower()
+    is_live = mode in ("live", "execute", "apply", "yes")
+
+    run_remediation_plan(
+        client=client,
+        targets=targets,
+        downgrade=False,
+        deactivate=True,
+        new_owner_email=new_owner_email,
+        archive_docs=archive_docs,
+        execute=is_live,
+        auto_confirm=True,
+        one_by_one=True,
+    )
+
+
+def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> int:
     while True:
+        departed = [r for r in records if r.is_departed]
+        departed_active_paid = [r for r in departed if r.sigma_status == "active" and r.is_paid]
+
         print("\n" + AuditReporter.render_summary(records))
         print("\nChoose an option:")
         print("  1. List departed employees with active PAID licenses (CRITICAL)")
         print("  2. List all departed employees in Sigma")
         print("  3. Downgrade active departed paid users to View (dry-run preview)")
-        print("  4. Deactivate active departed users (dry-run preview)")
-        print("  5. Custom search user")
-        print("  6. Export audit to CSV /tmp/sigma_departed_audit.csv")
+        print("  4. Batch deactivate active departed users (dry-run preview)")
+        print("  5. Deactivate one-by-one (interactive step-through or pick user)")
+        print("  6. Custom search user")
+        print("  7. Export audit to CSV /tmp/sigma_departed_audit.csv")
         print("  q. Quit")
 
-        choice = input("\nEnter choice [1-6, q]: ").strip()
+        choice = input("\nEnter choice [1-7, q]: ").strip()
         if choice in ("q", "quit", "exit"):
             return 0
         elif choice == "1":
@@ -785,23 +910,26 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
                 auto_confirm=False,
             )
         elif choice == "4":
-            owner = input("Enter destination email for reassigned documents: ").strip()
+            owner = input("Enter destination email for reassigned documents (or 'archive'): ").strip()
             if owner:
+                archive_docs = owner.lower() == "archive"
                 run_remediation_plan(
                     client=client,
                     targets=departed_active_paid,
                     downgrade=False,
                     deactivate=True,
-                    new_owner_email=owner,
-                    archive_docs=False,
+                    new_owner_email=None if archive_docs else owner,
+                    archive_docs=archive_docs,
                     execute=False,
                     auto_confirm=False,
                 )
         elif choice == "5":
+            interactive_deactivate_one_by_one(records, client)
+        elif choice == "6":
             term = input("Search query: ").strip().lower()
             matches = [r for r in records if term in r.email.lower() or term in r.full_name.lower()]
             print(AuditReporter.render_table(matches))
-        elif choice == "6":
+        elif choice == "7":
             csv_path = Path("/tmp/sigma_departed_audit.csv")
             csv_path.write_text(AuditReporter.render_csv(records), encoding="utf-8")
             print(f"Exported {len(records)} records to {csv_path}")
@@ -872,6 +1000,7 @@ def main() -> int:
             archive_docs=args.archive_docs,
             execute=args.execute,
             auto_confirm=args.yes,
+            one_by_one=args.one_by_one,
         )
 
     # Output rendering

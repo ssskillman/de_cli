@@ -302,6 +302,66 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertEqual(client.updates, [("m-1", "View")])
         self.assertEqual(client.deactivations, [("m-1", "owner-1", False)])
 
+    def test_remediation_one_by_one(self):
+        owner_member = {
+            "memberId": "owner-1",
+            "email": "manager@iterable.com",
+            "isArchived": False,
+            "isInactive": False,
+        }
+        client = FakeSigmaClient(members=[owner_member])
+
+        target1 = MemberAuditRecord(
+            email="user1@iterable.com",
+            member_id="m-1",
+            first_name="User",
+            last_name="One",
+            member_type="Act",
+            license_type="Build",
+            user_kind="internal",
+            sigma_status="active",
+            is_archived=False,
+            is_inactive=False,
+            is_departed=True,
+            is_paid=True,
+            risk_level="CRITICAL",
+        )
+        target2 = MemberAuditRecord(
+            email="user2@iterable.com",
+            member_id="m-2",
+            first_name="User",
+            last_name="Two",
+            member_type="Analyze",
+            license_type="Analyze",
+            user_kind="internal",
+            sigma_status="active",
+            is_archived=False,
+            is_inactive=False,
+            is_departed=True,
+            is_paid=True,
+            risk_level="CRITICAL",
+        )
+
+        from unittest.mock import patch
+
+        # Confirm user1 (y), skip user2 (n) in live mode
+        with patch("builtins.input", side_effect=["y", "n"]):
+            code = run_remediation_plan(
+                client=client,
+                targets=[target1, target2],
+                downgrade=False,
+                deactivate=True,
+                new_owner_email="manager@iterable.com",
+                archive_docs=False,
+                execute=True,
+                auto_confirm=True,
+                one_by_one=True,
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(client.deactivations, [("m-1", "owner-1", False)])
+            self.assertEqual(target1.sigma_status, "deactivated")
+            self.assertEqual(target2.sigma_status, "active")
+
 
 if __name__ == "__main__":
     unittest.main()
