@@ -20,6 +20,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -901,6 +903,94 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class BrailleSpinner:
+    FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    def __init__(self, message: str = "") -> None:
+        self.message = message
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not sys.stderr.isatty():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def update(self, message: str) -> None:
+        self.message = message
+
+    def _spin(self) -> None:
+        idx = 0
+        sys.stderr.write("\033[?25l")
+        try:
+            while not self._stop_event.is_set():
+                frame = self.FRAMES[idx % len(self.FRAMES)]
+                sys.stderr.write(f"\r\033[K{frame} {self.message}")
+                sys.stderr.flush()
+                idx += 1
+                time.sleep(0.08)
+        finally:
+            sys.stderr.write("\r\033[K\033[?25h")
+            sys.stderr.flush()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+            self._thread = None
+        if sys.stderr.isatty():
+            sys.stderr.write("\r\033[K\033[?25h")
+            sys.stderr.flush()
+
+
+def fzf_pick_choice(
+    entries: list[tuple[str, str]],
+    *,
+    prompt: str = "action > ",
+    header: str = "",
+) -> str | None:
+    if not entries:
+        return None
+    if shutil.which("fzf") and sys.stdin.isatty():
+        lines = [f"{key}\t{label}" for key, label in entries]
+        cmd = [
+            "fzf",
+            "--ansi",
+            "--no-mouse",
+            "--height=40%",
+            "--reverse",
+            "--border=rounded",
+            "--cycle",
+            "--delimiter=\t",
+            "--with-nth=2",
+            f"--prompt={prompt}",
+            "--pointer=▶",
+            f"--header={header}",
+            "--footer=Enter=select · Esc=cancel",
+        ]
+        proc = subprocess.run(
+            cmd,
+            input="\n".join(lines) + "\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.split("\t", 1)[0].strip()
+        return None
+
+    # Numbered fallback if fzf/tty unavailable
+    print(f"\n{header}")
+    for idx, (key, label) in enumerate(entries, 1):
+        print(f"  {idx}. {label}")
+    ans = input(f"\n{prompt}").strip()
+    if ans.isdigit() and 1 <= int(ans) <= len(entries):
+        return entries[int(ans) - 1][0]
+    return None
+
+
 def run_remediation_plan(
     client: SigmaClient,
     targets: list[MemberAuditRecord],
@@ -1010,28 +1100,81 @@ def run_remediation_plan(
             return 0
 
     # Execute batch
-    for item in plan:
-        mid = item["memberId"]
-        email = item["email"]
-        t = next((x for x in targets if x.member_id == mid), None)
-        if downgrade:
-            client.update_member_type(mid, "View")
-            if t:
-                t.member_type = "View"
-                t.license_type = "View"
-                t.is_paid = False
-            print(f"Downgraded {email} -> View")
-        if deactivate:
-            client.deactivate_member(mid, new_owner_id=new_owner_id, archive_docs=archive_docs)
-            if t:
-                t.sigma_status = "deactivated"
-                t.is_archived = True
-                t.is_paid = False
-                t.risk_level = "CLEAN"
-            print(f"Deactivated {email}")
+    tier_counts = {"Build": 0, "Analyze": 0, "Act": 0}
+    succeeded = 0
+    failed = 0
+    errors: list[str] = []
 
-    print(f"\nSuccessfully executed remediation on {len(plan)} user(s).")
-    return 0
+    spinner = BrailleSpinner()
+    spinner.start()
+    try:
+        for idx, item in enumerate(plan, 1):
+            mid = item["memberId"]
+            email = item["email"]
+            current_tier = item["currentTier"]
+            t = next((x for x in targets if x.member_id == mid), None)
+            action_desc = "Downgrading" if downgrade else "Deactivating"
+            spinner.update(f"{action_desc} {email} ({idx}/{len(plan)})...")
+            try:
+                if downgrade:
+                    client.update_member_type(mid, "View")
+                    if t:
+                        t.member_type = "View"
+                        t.license_type = "View"
+                        t.is_paid = False
+                        t.utilization_status = "FREE_VIEW"
+                        t.recommendation = "—"
+                    if current_tier in tier_counts:
+                        tier_counts[current_tier] += 1
+                    print(f"Downgraded {email} -> View")
+                if deactivate:
+                    client.deactivate_member(mid, new_owner_id=new_owner_id, archive_docs=archive_docs)
+                    if t:
+                        t.sigma_status = "deactivated"
+                        t.is_archived = True
+                        t.is_paid = False
+                        t.risk_level = "CLEAN"
+                        t.utilization_status = "DEPARTED"
+                        t.recommendation = "—"
+                    print(f"Deactivated {email}")
+                succeeded += 1
+            except Exception as exc:
+                failed += 1
+                errors.append(f"{email}: {exc}")
+                print(f"ERROR: failed on {email}: {exc}", file=sys.stderr)
+    finally:
+        spinner.stop()
+
+    action_title = "Downgrade to View" if downgrade else "Deactivate Member"
+    lines = [
+        "",
+        "============================================================",
+        "              REMEDIATION EXECUTION SUMMARY                 ",
+        "============================================================",
+        f"Action:                   {action_title}",
+        f"Mode:                     Full Prod Send It",
+        f"Total Targeted:           {len(plan)}",
+        f"Successfully Completed:   {succeeded}",
+        f"Failed:                   {failed}",
+    ]
+    if downgrade and succeeded > 0:
+        lines.extend([
+            "------------------------------------------------------------",
+            "Reclaimed Paid Seats by Tier:",
+            f"  Build -> View:          {tier_counts['Build']} seats",
+            f"  Analyze -> View:        {tier_counts['Analyze']} seats",
+            f"  Act -> View:            {tier_counts['Act']} seats",
+            f"  TOTAL RECLAIMED:        {sum(tier_counts.values())} seats",
+        ])
+    if errors:
+        lines.extend([
+            "------------------------------------------------------------",
+            "Errors encountered:",
+            *[f"  • {err}" for err in errors[:5]],
+        ])
+    lines.append("============================================================")
+    print("\n".join(lines))
+    return 0 if failed == 0 else 1
 
 
 def interactive_deactivate_one_by_one(records: list[MemberAuditRecord], client: SigmaClient) -> None:
@@ -1117,7 +1260,7 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
         print("  4. List view-only Builders (holding Build tier but 0 edits)")
         print("  5. List all departed employees in Sigma")
         print("  6. Downgrade active departed paid users to View (dry-run preview)")
-        print("  7. Downgrade dormant paid users to View (dry-run preview)")
+        print("  7. Downgrade dormant paid users to View (dry-run preview or full prod send it)")
         print("  8. Batch deactivate active departed users (dry-run preview)")
         print("  9. Deactivate one-by-one (interactive step-through or pick user)")
         print("  10. Custom search user")
@@ -1153,7 +1296,26 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
                 execute=False,
                 auto_confirm=False,
             )
+            input("\nPress Enter to return to menu...")
         elif choice == "7":
+            if not dormant_paid:
+                print("\nNo dormant paid users found to downgrade.")
+                input("\nPress Enter to return to menu...")
+                continue
+
+            mode = fzf_pick_choice(
+                [
+                    ("dry-run", "Dry-run preview (simulate downgrades, no changes made)"),
+                    ("prod", "Full prod send it (apply live downgrades to View in Sigma)"),
+                ],
+                prompt="mode > ",
+                header=f"Downgrade {len(dormant_paid)} dormant paid user(s) to View · pick mode",
+            )
+            if not mode:
+                print("Cancelled.")
+                continue
+
+            is_prod = (mode == "prod")
             run_remediation_plan(
                 client=client,
                 targets=dormant_paid,
@@ -1161,9 +1323,10 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
                 deactivate=False,
                 new_owner_email=None,
                 archive_docs=False,
-                execute=False,
+                execute=is_prod,
                 auto_confirm=False,
             )
+            input("\nPress Enter to return to menu...")
         elif choice == "8":
             owner = input("Enter destination email for reassigned documents (or 'archive'): ").strip()
             if owner:
@@ -1178,6 +1341,7 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
                     execute=False,
                     auto_confirm=False,
                 )
+                input("\nPress Enter to return to menu...")
         elif choice == "9":
             interactive_deactivate_one_by_one(records, client)
         elif choice == "10":

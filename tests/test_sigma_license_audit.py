@@ -21,6 +21,8 @@ AuditReporter = MODULE.AuditReporter
 SnowflakeWorkerStore = MODULE.SnowflakeWorkerStore
 ActivityStore = MODULE.ActivityStore
 run_remediation_plan = MODULE.run_remediation_plan
+BrailleSpinner = MODULE.BrailleSpinner
+fzf_pick_choice = MODULE.fzf_pick_choice
 
 
 class FakeSigmaClient:
@@ -730,6 +732,20 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertLess(pos_zoe, pos_alice)
         self.assertLess(pos_alice, pos_zach)
         self.assertLess(pos_zach, pos_bob)
+
+    def test_braille_spinner_lifecycle(self):
+        spinner = BrailleSpinner("Testing...")
+        spinner.start()
+        spinner.update("Updated...")
+        spinner.stop()
+        self.assertIsNone(spinner._thread)
+
+    def test_fzf_pick_choice_fallback(self):
+        from unittest.mock import patch
+        entries = [("opt1", "Option 1"), ("opt2", "Option 2")]
+        with patch("shutil.which", return_value=None), patch("builtins.input", return_value="2"):
+            res = fzf_pick_choice(entries, prompt="pick> ", header="Choose")
+            self.assertEqual(res, "opt2")
 
 
 if __name__ == "__main__":
