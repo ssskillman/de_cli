@@ -200,6 +200,24 @@ def ask_return_to_menu() -> bool:
     return ans in ("", "y", "yes")
 
 
+def pause_after_tool() -> bool:
+    """Pause after running a tool so the user can inspect output and scroll.
+
+    Returns True to continue in the menu, False to exit.
+    """
+    if not sys.stdin.isatty():
+        return True
+    try:
+        console.print("\n[dim]Press Enter to return to menu (or 'q' to quit)...[/dim]", end="")
+        sys.stderr.flush()
+        ans = input().strip().lower()
+        if ans in ("q", "quit", "exit"):
+            return False
+        return True
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
 def list_tools(*, as_table: bool = True) -> None:
     tools = tools_sorted()
     if not as_table:
@@ -392,6 +410,9 @@ def interactive_menu(
             group = None
             print_banner(console)
             continue
+
+        if not pause_after_tool():
+            return last_code
 
         # Stay on this group's tool list. Esc there returns to groups.
         # Do not ask "Return to de menu?" — that jumps to the top.

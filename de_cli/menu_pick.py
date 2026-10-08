@@ -19,6 +19,7 @@ def _fzf_pick(lines: list[str], *, header: str, prompt: str) -> str | None:
         [
             "fzf",
             "--ansi",
+            "--no-mouse",
             "--height=60%",
             "--reverse",
             "--border=rounded",

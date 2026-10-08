@@ -1121,14 +1121,19 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
             return 0
         elif choice == "1":
             print(AuditReporter.render_table(departed_active_paid))
+            input("\nPress Enter to return to menu...")
         elif choice == "2":
             print(AuditReporter.render_table(paid_active, utilization_mode=True))
+            input("\nPress Enter to return to menu...")
         elif choice == "3":
             print(AuditReporter.render_table(dormant_paid, utilization_mode=True))
+            input("\nPress Enter to return to menu...")
         elif choice == "4":
             print(AuditReporter.render_table(underutilized_build, utilization_mode=True))
+            input("\nPress Enter to return to menu...")
         elif choice == "5":
             print(AuditReporter.render_table(departed))
+            input("\nPress Enter to return to menu...")
         elif choice == "6":
             run_remediation_plan(
                 client=client,
@@ -1171,10 +1176,12 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
             term = input("Search query: ").strip().lower()
             matches = [r for r in records if term in r.email.lower() or term in r.full_name.lower()]
             print(AuditReporter.render_table(matches))
+            input("\nPress Enter to return to menu...")
         elif choice == "11":
             csv_path = Path("/tmp/sigma_departed_audit.csv")
             csv_path.write_text(AuditReporter.render_csv(records), encoding="utf-8")
             print(f"Exported {len(records)} records to {csv_path}")
+            input("\nPress Enter to return to menu...")
 
 
 def main() -> int:

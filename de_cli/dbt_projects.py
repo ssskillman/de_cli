@@ -451,6 +451,7 @@ def fzf_pick_project() -> DbtProject | None:
         [
             "fzf",
             "--ansi",
+            "--no-mouse",
             "--height=40%",
             "--reverse",
             "--border=rounded",
@@ -564,6 +565,7 @@ def prompt_dbt_command(project: DbtProject) -> list[str] | None:
             [
                 "fzf",
                 "--ansi",
+                "--no-mouse",
                 "--height=40%",
                 "--reverse",
                 "--border=rounded",
