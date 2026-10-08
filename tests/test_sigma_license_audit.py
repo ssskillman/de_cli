@@ -600,6 +600,7 @@ class SigmaLicenseAuditTests(unittest.TestCase):
 
         # Utilization table check
         table = AuditReporter.render_table(records, utilization_mode=True)
+        self.assertIn("#", table)
         self.assertIn("Utilization", table)
         self.assertIn("Recommendation", table)
         self.assertIn("Events", table)

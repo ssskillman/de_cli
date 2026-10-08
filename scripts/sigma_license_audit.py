@@ -760,10 +760,11 @@ class AuditReporter:
                 return (1, -epoch, r.email.casefold())
 
             sorted_records = sorted(records, key=util_sort_key)
-            headers = ["Email", "Name", "Tier", "Invited", "Days", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
+            headers = ["#", "Email", "Name", "Tier", "Invited", "Days", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
             rows = []
-            for r in sorted_records:
+            for idx, r in enumerate(sorted_records, 1):
                 rows.append([
+                    str(idx),
                     r.email,
                     r.full_name[:22],
                     r.license_type,
@@ -777,10 +778,11 @@ class AuditReporter:
                 ])
         else:
             sorted_records = sorted(records, key=lambda r: (r.full_name.casefold(), r.email.casefold()))
-            headers = ["Email", "Name", "Tier", "Type", "Status", "Departed", "Term Date", "Risk"]
+            headers = ["#", "Email", "Name", "Tier", "Type", "Status", "Departed", "Term Date", "Risk"]
             rows = []
-            for r in sorted_records:
+            for idx, r in enumerate(sorted_records, 1):
                 rows.append([
+                    str(idx),
                     r.email,
                     r.full_name[:24],
                     r.license_type,
@@ -799,7 +801,13 @@ class AuditReporter:
         border = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
 
         def format_row(cells: list[str]) -> str:
-            return "| " + " | ".join(cell.ljust(col_widths[i]) for i, cell in enumerate(cells)) + " |"
+            formatted = []
+            for i, cell in enumerate(cells):
+                if i == 0 and cell != "#":
+                    formatted.append(cell.rjust(col_widths[i]))
+                else:
+                    formatted.append(cell.ljust(col_widths[i]))
+            return "| " + " | ".join(formatted) + " |"
 
         lines = [border, format_row(headers), border]
         for row in rows:
