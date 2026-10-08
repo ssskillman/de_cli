@@ -697,17 +697,18 @@ class AuditReporter:
 
         if utilization_mode:
             def util_sort_key(r: MemberAuditRecord):
-                status_order = {
-                    "DORMANT": 0,
-                    "UNDERUTILIZED_BUILD": 1,
-                    "DEPARTED": 2,
-                    "INACTIVE_PAID": 3,
-                    "ACTIVE_BUILDER": 4,
-                    "ACTIVE_ANALYST": 5,
-                    "FREE_VIEW": 6,
-                    "UNKNOWN": 7,
-                }
-                return (status_order.get(r.utilization_status, 9), r.full_name.casefold(), r.email.casefold())
+                is_never = not r.last_activity or r.last_activity.strip().lower() == "never"
+                if is_never:
+                    return (0, 0.0, r.email.casefold())
+
+                try:
+                    date_str = r.last_activity.strip().split()[0].split("T")[0]
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    epoch = dt.timestamp()
+                except Exception:
+                    epoch = 0.0
+
+                return (1, -epoch, r.email.casefold())
 
             sorted_records = sorted(records, key=util_sort_key)
             headers = ["Email", "Name", "Tier", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]

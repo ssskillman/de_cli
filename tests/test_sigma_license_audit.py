@@ -606,10 +606,12 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIn("DORMANT", table)
         self.assertIn("UNDERUTILIZED_BUILD", table)
         self.assertIn("ACTIVE_BUILDER", table)
-        # Verify DORMANT and UNDERUTILIZED_BUILD appear before ACTIVE_BUILDER in sort order
-        dormant_pos = table.index("DORMANT")
-        active_pos = table.index("ACTIVE_BUILDER")
+        # Verify DORMANT appears before ACTIVE_BUILDER (Never at top)
+        dormant_pos = table.index("dormant@iterable.com")
+        active_pos = table.index("builder@iterable.com")
+        view_pos = table.index("viewbuilder@iterable.com")
         self.assertLess(dormant_pos, active_pos)
+        self.assertLess(active_pos, view_pos)
 
         # JSON check
         json_data = json.loads(AuditReporter.render_json(records))
@@ -618,6 +620,113 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertEqual(util["activeBuilders"], 1)
         self.assertEqual(util["underutilizedBuilders"], 1)
         self.assertEqual(util["dormantPaid"], 1)
+
+    def test_utilization_table_sorting(self):
+        records = [
+            MemberAuditRecord(
+                email="zach.active@iterable.com",
+                member_id="m-1",
+                first_name="Zach",
+                last_name="Active",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="2026-10-08T15:00:00Z",
+                utilization_status="ACTIVE_BUILDER",
+            ),
+            MemberAuditRecord(
+                email="alice.active@iterable.com",
+                member_id="m-2",
+                first_name="Alice",
+                last_name="Active",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="2026-10-08T09:00:00Z",
+                utilization_status="ACTIVE_BUILDER",
+            ),
+            MemberAuditRecord(
+                email="bob.older@iterable.com",
+                member_id="m-3",
+                first_name="Bob",
+                last_name="Older",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="2026-10-05T10:00:00Z",
+                utilization_status="UNDERUTILIZED_BUILD",
+            ),
+            MemberAuditRecord(
+                email="zoe.never@iterable.com",
+                member_id="m-4",
+                first_name="Zoe",
+                last_name="Never",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="",
+                utilization_status="DORMANT",
+            ),
+            MemberAuditRecord(
+                email="adam.never@iterable.com",
+                member_id="m-5",
+                first_name="Adam",
+                last_name="Never",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="Never",
+                utilization_status="DORMANT",
+            ),
+        ]
+
+        table = AuditReporter.render_table(records, utilization_mode=True)
+        # Expected order:
+        # 1. adam.never (Never, alpha email)
+        # 2. zoe.never (Never, alpha email)
+        # 3. alice.active (2026-10-08, alpha email)
+        # 4. zach.active (2026-10-08, alpha email)
+        # 5. bob.older (2026-10-05)
+        pos_adam = table.index("adam.never@iterable.com")
+        pos_zoe = table.index("zoe.never@iterable.com")
+        pos_alice = table.index("alice.active@iterable.com")
+        pos_zach = table.index("zach.active@iterable.com")
+        pos_bob = table.index("bob.older@iterable.com")
+
+        self.assertLess(pos_adam, pos_zoe)
+        self.assertLess(pos_zoe, pos_alice)
+        self.assertLess(pos_alice, pos_zach)
+        self.assertLess(pos_zach, pos_bob)
 
 
 if __name__ == "__main__":
