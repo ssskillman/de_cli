@@ -319,7 +319,7 @@ class SigmaClient:
 
 class SnowflakeWorkerStore:
     SQL_DEPARTED = """
-WITH worker_status AS (
+WITH adp_terms AS (
     SELECT 
         LOWER(TRIM(b.EMAIL_URI)) as email,
         MAX(ph.LEGAL_NAME_FORMATTED_NAME) as full_name,
@@ -333,14 +333,30 @@ WITH worker_status AS (
         ON ph.WORKER_ID = w.ID
     WHERE b.EMAIL_URI IS NOT NULL AND b.EMAIL_URI LIKE '%@%'
     GROUP BY 1
+),
+okta_terms AS (
+    SELECT 
+        LOWER(TRIM(PROFILE_EMAIL)) as email,
+        MAX(TRIM(CONCAT(COALESCE(PROFILE_FIRST_NAME, ''), ' ', COALESCE(PROFILE_LAST_NAME, '')))) as full_name,
+        MAX(STATUS_CHANGED::date) as max_term_date,
+        BOOLOR_AGG(STATUS = 'ACTIVE') as has_active_record,
+        BOOLOR_AGG(STATUS IN ('DEPROVISIONED', 'SUSPENDED')) as has_terminated_record
+    FROM FIVETRAN_DB.OKTA.USERS
+    WHERE PROFILE_EMAIL IS NOT NULL AND PROFILE_EMAIL LIKE '%@%'
+    GROUP BY 1
+),
+combined AS (
+    SELECT email, full_name, max_term_date FROM adp_terms WHERE has_terminated_record AND NOT has_active_record
+    UNION ALL
+    SELECT email, full_name, max_term_date FROM okta_terms WHERE has_terminated_record AND NOT has_active_record
 )
 SELECT 
-    email,
-    COALESCE(full_name, '') as full_name,
-    max_term_date::text as termination_date
-FROM worker_status
-WHERE has_terminated_record AND NOT has_active_record
-ORDER BY max_term_date DESC NULLS LAST;
+    email, 
+    COALESCE(MAX(full_name), '') as full_name, 
+    MAX(max_term_date)::text as termination_date 
+FROM combined
+GROUP BY email
+ORDER BY 3 DESC NULLS LAST;
 """.strip()
 
     @staticmethod
