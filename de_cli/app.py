@@ -71,6 +71,7 @@ app = typer.Typer(
         "  de sigma-licenses              # fzf menu (summary / report / teams)\n"
         "  de licenses summary            # billed-tier + account-type matrices\n"
         "  de sigma-audit --summary       # audit licenses vs Snowflake ADP terminations\n"
+        "  de sigma-audit --utilization   # paid license activity, dormant & view-only builders\n"
         "  de sigma-audit --paid-only --active-only  # list departed users on paid seats"
     ),
     add_completion=False,

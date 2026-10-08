@@ -13,11 +13,13 @@ assert SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 DepartedWorker = MODULE.DepartedWorker
+UserActivity = MODULE.UserActivity
 MemberAuditRecord = MODULE.MemberAuditRecord
 derive_tier_from_permissions = MODULE.derive_tier_from_permissions
 build_audit_records = MODULE.build_audit_records
 AuditReporter = MODULE.AuditReporter
 SnowflakeWorkerStore = MODULE.SnowflakeWorkerStore
+ActivityStore = MODULE.ActivityStore
 run_remediation_plan = MODULE.run_remediation_plan
 
 
@@ -234,7 +236,7 @@ class SigmaLicenseAuditTests(unittest.TestCase):
 
         # CSV check
         csv_str = AuditReporter.render_csv(records)
-        self.assertIn("alice@iterable.com,Alice Departed,Build,Act,True,active,True,2026-08-01,CRITICAL,m-1", csv_str)
+        self.assertIn("alice@iterable.com,Alice Departed,Build,Act,True,active,True,2026-08-01,CRITICAL", csv_str)
 
     def test_cache_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -361,6 +363,261 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             self.assertEqual(client.deactivations, [("m-1", "owner-1", False)])
             self.assertEqual(target1.sigma_status, "deactivated")
             self.assertEqual(target2.sigma_status, "active")
+
+    def test_activity_store_cache_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "activity_cache.json"
+            activities = {
+                "builder@iterable.com": UserActivity(
+                    email="builder@iterable.com",
+                    last_activity="2026-10-08T12:00:00Z",
+                    last_login="2026-10-08T09:00:00Z",
+                    last_opened="2026-10-08T11:00:00Z",
+                    last_edit="2026-10-08T12:00:00Z",
+                    total_events=500,
+                ),
+                "viewer@iterable.com": UserActivity(
+                    email="viewer@iterable.com",
+                    last_activity="2026-10-07T15:00:00Z",
+                    total_events=12,
+                ),
+            }
+            ActivityStore.save_cache(activities, cache_file)
+            loaded = ActivityStore.load_cached(cache_file)
+            self.assertEqual(len(loaded), 2)
+            self.assertEqual(loaded["builder@iterable.com"].last_edit, "2026-10-08T12:00:00Z")
+            self.assertEqual(loaded["builder@iterable.com"].total_events, 500)
+
+    def test_utilization_classification(self):
+        raw_members = [
+            # 1. Active employee, Build tier, active editor -> ACTIVE_BUILDER
+            {
+                "memberId": "m-b1",
+                "email": "active.builder@iterable.com",
+                "firstName": "Active",
+                "lastName": "Builder",
+                "memberType": "admin",
+                "userKind": "internal",
+                "isArchived": False,
+                "isInactive": False,
+            },
+            # 2. Active employee, Build tier, views only -> UNDERUTILIZED_BUILD
+            {
+                "memberId": "m-b2",
+                "email": "viewing.builder@iterable.com",
+                "firstName": "Viewing",
+                "lastName": "Builder",
+                "memberType": "build",
+                "userKind": "internal",
+                "isArchived": False,
+                "isInactive": False,
+            },
+            # 3. Active employee, Analyze tier, active explorer -> ACTIVE_ANALYST
+            {
+                "memberId": "m-a1",
+                "email": "active.analyst@iterable.com",
+                "firstName": "Active",
+                "lastName": "Analyst",
+                "memberType": "Analyze",
+                "userKind": "internal",
+                "isArchived": False,
+                "isInactive": False,
+            },
+            # 4. Active employee, paid tier, no events -> DORMANT
+            {
+                "memberId": "m-d1",
+                "email": "dormant.user@iterable.com",
+                "firstName": "Dormant",
+                "lastName": "User",
+                "memberType": "Analyze",
+                "userKind": "internal",
+                "isArchived": False,
+                "isInactive": False,
+            },
+            # 5. Departed employee with paid tier -> DEPARTED
+            {
+                "memberId": "m-dep",
+                "email": "departed.paid@iterable.com",
+                "firstName": "Departed",
+                "lastName": "Paid",
+                "memberType": "build",
+                "userKind": "internal",
+                "isArchived": False,
+                "isInactive": False,
+            },
+            # 6. Active employee on View tier -> FREE_VIEW
+            {
+                "memberId": "m-v1",
+                "email": "free.view@iterable.com",
+                "firstName": "Free",
+                "lastName": "View",
+                "memberType": "View",
+                "userKind": "internal",
+                "isArchived": False,
+                "isInactive": False,
+            },
+        ]
+
+        departed_workers = [
+            DepartedWorker(email="departed.paid@iterable.com", full_name="Departed Paid", termination_date="2026-09-01"),
+        ]
+
+        activities = {
+            "active.builder@iterable.com": UserActivity(
+                email="active.builder@iterable.com",
+                last_activity="2026-10-08T12:00:00Z",
+                last_edit="2026-10-07T14:00:00Z",
+                total_events=250,
+            ),
+            "viewing.builder@iterable.com": UserActivity(
+                email="viewing.builder@iterable.com",
+                last_activity="2026-10-08T10:00:00Z",
+                last_edit="",  # Zero edits
+                total_events=40,
+            ),
+            "active.analyst@iterable.com": UserActivity(
+                email="active.analyst@iterable.com",
+                last_activity="2026-10-06T09:00:00Z",
+                total_events=80,
+            ),
+            # dormant.user@iterable.com is not in activities dict
+        }
+
+        type_to_tier = {
+            "admin": "Build",
+            "build": "Build",
+            "Analyze": "Analyze",
+            "View": "View",
+        }
+
+        records = build_audit_records(raw_members, departed_workers, type_to_tier, activities=activities)
+        by_email = {r.email: r for r in records}
+
+        # Active builder
+        b1 = by_email["active.builder@iterable.com"]
+        self.assertEqual(b1.utilization_status, "ACTIVE_BUILDER")
+        self.assertEqual(b1.recommendation, "Keep (Active Builder)")
+        self.assertEqual(b1.total_events, 250)
+
+        # Viewing builder (underutilized)
+        b2 = by_email["viewing.builder@iterable.com"]
+        self.assertEqual(b2.utilization_status, "UNDERUTILIZED_BUILD")
+        self.assertEqual(b2.recommendation, "Downgrade (View / Analyze)")
+        self.assertEqual(b2.last_edit, "")
+
+        # Active analyst
+        a1 = by_email["active.analyst@iterable.com"]
+        self.assertEqual(a1.utilization_status, "ACTIVE_ANALYST")
+        self.assertEqual(a1.recommendation, "Keep (Active Analyst)")
+
+        # Dormant user
+        d1 = by_email["dormant.user@iterable.com"]
+        self.assertEqual(d1.utilization_status, "DORMANT")
+        self.assertEqual(d1.recommendation, "Reclaim (Downgrade to View)")
+        self.assertEqual(d1.total_events, 0)
+
+        # Departed user
+        dep = by_email["departed.paid@iterable.com"]
+        self.assertEqual(dep.utilization_status, "DEPARTED")
+        self.assertEqual(dep.recommendation, "Deactivate")
+
+        # Free view user
+        v1 = by_email["free.view@iterable.com"]
+        self.assertEqual(v1.utilization_status, "FREE_VIEW")
+        self.assertEqual(v1.recommendation, "—")
+
+    def test_utilization_table_and_summary_rendering(self):
+        records = [
+            MemberAuditRecord(
+                email="builder@iterable.com",
+                member_id="m-1",
+                first_name="Active",
+                last_name="Builder",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="2026-10-08T12:00:00Z",
+                last_edit="2026-10-07T14:00:00Z",
+                total_events=150,
+                utilization_status="ACTIVE_BUILDER",
+                recommendation="Keep (Active Builder)",
+            ),
+            MemberAuditRecord(
+                email="viewbuilder@iterable.com",
+                member_id="m-2",
+                first_name="Viewing",
+                last_name="Builder",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="2026-10-05T12:00:00Z",
+                last_edit="",
+                total_events=20,
+                utilization_status="UNDERUTILIZED_BUILD",
+                recommendation="Downgrade (View / Analyze)",
+            ),
+            MemberAuditRecord(
+                email="dormant@iterable.com",
+                member_id="m-3",
+                first_name="Dormant",
+                last_name="Analyst",
+                member_type="Analyze",
+                license_type="Analyze",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="",
+                last_edit="",
+                total_events=0,
+                utilization_status="DORMANT",
+                recommendation="Reclaim (Downgrade to View)",
+            ),
+        ]
+
+        # Summary check
+        summary = AuditReporter.render_summary(records)
+        self.assertIn("Paid License Utilization & Optimization (Last 30 Days):", summary)
+        self.assertIn("View-Only Builders:    1", summary)
+        self.assertIn("Dormant Paid Seats:    1", summary)
+        self.assertIn("Effectively Utilized:        1", summary)
+        self.assertIn("TOTAL OPTIMIZATION TARGETS:          2", summary)
+
+        # Utilization table check
+        table = AuditReporter.render_table(records, utilization_mode=True)
+        self.assertIn("Utilization", table)
+        self.assertIn("Recommendation", table)
+        self.assertIn("Events", table)
+        self.assertIn("DORMANT", table)
+        self.assertIn("UNDERUTILIZED_BUILD", table)
+        self.assertIn("ACTIVE_BUILDER", table)
+        # Verify DORMANT and UNDERUTILIZED_BUILD appear before ACTIVE_BUILDER in sort order
+        dormant_pos = table.index("DORMANT")
+        active_pos = table.index("ACTIVE_BUILDER")
+        self.assertLess(dormant_pos, active_pos)
+
+        # JSON check
+        json_data = json.loads(AuditReporter.render_json(records))
+        util = json_data["summary"]["utilization"]
+        self.assertEqual(util["activePaidTotal"], 3)
+        self.assertEqual(util["activeBuilders"], 1)
+        self.assertEqual(util["underutilizedBuilders"], 1)
+        self.assertEqual(util["dormantPaid"], 1)
 
 
 if __name__ == "__main__":

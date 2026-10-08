@@ -52,6 +52,7 @@ _maybe_reexec_into_udi_venv()
 DEFAULT_SIGMA_ENV = Path.home() / ".config" / "sigma" / "env"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "de"
 DEFAULT_CACHE_FILE = DEFAULT_CACHE_DIR / "adp_departed_workers.json"
+DEFAULT_ACTIVITY_CACHE_FILE = DEFAULT_CACHE_DIR / "sigma_user_activity.json"
 DEFAULT_DBT_PROFILES = Path.home() / ".dbt" / "profiles.yml"
 
 TIERS = ["View", "Act", "Analyze", "Build"]
@@ -94,6 +95,16 @@ class DepartedWorker:
     termination_date: str
 
 
+@dataclass(frozen=True)
+class UserActivity:
+    email: str
+    last_activity: str = ""
+    last_login: str = ""
+    last_opened: str = ""
+    last_edit: str = ""
+    total_events: int = 0
+
+
 @dataclass
 class MemberAuditRecord:
     email: str
@@ -111,6 +122,13 @@ class MemberAuditRecord:
     adp_name: str = ""
     is_paid: bool = False
     risk_level: str = "NONE"  # CRITICAL, HIGH, MEDIUM, LOW, CLEAN
+    last_activity: str = ""
+    last_login: str = ""
+    last_opened: str = ""
+    last_edit: str = ""
+    total_events: int = 0
+    utilization_status: str = "UNKNOWN"
+    recommendation: str = ""
 
     @property
     def full_name(self) -> str:
@@ -451,11 +469,50 @@ ORDER BY max_term_date DESC NULLS LAST;
         }
 
 
+class ActivityStore:
+    @staticmethod
+    def load_cached(cache_file: Path = DEFAULT_ACTIVITY_CACHE_FILE) -> dict[str, UserActivity]:
+        if not cache_file.is_file():
+            return {}
+        try:
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            out: dict[str, UserActivity] = {}
+            items = data.values() if isinstance(data, dict) else data
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                email = str(item.get("EMAIL") or item.get("email") or "").strip().lower()
+                if not email:
+                    continue
+                out[email] = UserActivity(
+                    email=email,
+                    last_activity=str(item.get("LAST_ACTIVITY") or item.get("last_activity") or "").strip(),
+                    last_login=str(item.get("LAST_LOGIN") or item.get("last_login") or "").strip(),
+                    last_opened=str(item.get("LAST_OPENED") or item.get("last_opened") or "").strip(),
+                    last_edit=str(item.get("LAST_EDIT") or item.get("last_edit") or "").strip(),
+                    total_events=int(item.get("TOTAL_EVENTS") or item.get("total_events") or 0),
+                )
+            return out
+        except Exception as exc:
+            print(f"warn: could not load activity cache {cache_file}: {exc}", file=sys.stderr)
+            return {}
+
+    @staticmethod
+    def save_cache(activities: dict[str, UserActivity], cache_file: Path = DEFAULT_ACTIVITY_CACHE_FILE) -> None:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {k: asdict(v) for k, v in activities.items()}
+        cache_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def build_audit_records(
     raw_members: list[dict[str, Any]],
     departed_workers: list[DepartedWorker],
     type_to_tier: dict[str, str],
+    activities: dict[str, UserActivity] | None = None,
 ) -> list[MemberAuditRecord]:
+    if activities is None:
+        activities = ActivityStore.load_cached()
+
     departed_by_email = {w.email: w for w in departed_workers}
     records: list[MemberAuditRecord] = []
 
@@ -509,6 +566,37 @@ def build_audit_records(
         else:
             risk_level = "LOW"
 
+        # Activity and Utilization classification
+        act = (activities or {}).get(email)
+        last_activity = act.last_activity if act else ""
+        last_login = act.last_login if act else ""
+        last_opened = act.last_opened if act else ""
+        last_edit = act.last_edit if act else ""
+        total_events = act.total_events if act else 0
+
+        if is_departed:
+            utilization_status = "DEPARTED"
+            recommendation = "Deactivate" if sigma_status == "active" else "—"
+        elif not is_paid:
+            utilization_status = "FREE_VIEW"
+            recommendation = "—"
+        elif sigma_status != "active":
+            utilization_status = "INACTIVE_PAID"
+            recommendation = "Downgrade to View"
+        elif total_events == 0 or not last_activity:
+            utilization_status = "DORMANT"
+            recommendation = "Reclaim (Downgrade to View)"
+        elif tier == "Build":
+            if last_edit:
+                utilization_status = "ACTIVE_BUILDER"
+                recommendation = "Keep (Active Builder)"
+            else:
+                utilization_status = "UNDERUTILIZED_BUILD"
+                recommendation = "Downgrade (View / Analyze)"
+        else:
+            utilization_status = "ACTIVE_ANALYST"
+            recommendation = "Keep (Active Analyst)"
+
         record = MemberAuditRecord(
             email=email,
             member_id=str(raw.get("memberId") or ""),
@@ -525,10 +613,26 @@ def build_audit_records(
             adp_name=departed_info.full_name if departed_info else "",
             is_paid=is_paid,
             risk_level=risk_level,
+            last_activity=last_activity,
+            last_login=last_login,
+            last_opened=last_opened,
+            last_edit=last_edit,
+            total_events=total_events,
+            utilization_status=utilization_status,
+            recommendation=recommendation,
         )
         records.append(record)
 
     return records
+
+
+def format_ts_date(ts: str) -> str:
+    if not ts:
+        return "Never"
+    clean = ts.replace("Z", "").replace("T", " ")
+    if " " in clean:
+        return clean.split(" ", 1)[0]
+    return clean[:10]
 
 
 class AuditReporter:
@@ -549,6 +653,13 @@ class AuditReporter:
         tier_counts = {t: sum(1 for r in paid_in_use if r.license_type == t) for t in ("Build", "Analyze", "Act")}
         reclaimable_tiers = {t: sum(1 for r in departed_active_paid if r.license_type == t) for t in ("Build", "Analyze", "Act")}
 
+        # Utilization metrics for active paid seats
+        active_builders = sum(1 for r in paid_in_use if r.utilization_status == "ACTIVE_BUILDER")
+        active_analysts = sum(1 for r in paid_in_use if r.utilization_status == "ACTIVE_ANALYST")
+        underutilized_builders = sum(1 for r in paid_in_use if r.utilization_status == "UNDERUTILIZED_BUILD")
+        dormant_paid = sum(1 for r in paid_in_use if r.utilization_status == "DORMANT")
+        departed_paid = sum(1 for r in paid_in_use if r.utilization_status == "DEPARTED")
+
         lines = [
             "============================================================",
             "             SIGMA LICENSE & OFFBOARDING AUDIT              ",
@@ -568,29 +679,65 @@ class AuditReporter:
             f"  Analyze seats:            {reclaimable_tiers['Analyze']:4d}",
             f"  Act seats:                {reclaimable_tiers['Act']:4d}",
             f"  TOTAL RECLAIMABLE:        {len(departed_active_paid):4d}",
+            "------------------------------------------------------------",
+            "Paid License Utilization & Optimization (Last 30 Days):",
+            f"  Effectively Utilized:     {active_builders + active_analysts:4d}  (Builders: {active_builders}, Analysts: {active_analysts})",
+            f"  [OPPORTUNITY] View-Only Builders: {underutilized_builders:4d}  <-- Build tier with 0 edits (downgrade to View/Analyze)",
+            f"  [OPPORTUNITY] Dormant Paid Seats: {dormant_paid:4d}  <-- 0 activity in 30d (reclaim candidate)",
+            f"  [CRITICAL]    Departed Paid Seats:{departed_paid:4d}  <-- Departed employees holding paid seats",
+            f"  TOTAL OPTIMIZATION TARGETS:       {underutilized_builders + dormant_paid + departed_paid:4d}",
             "============================================================",
         ]
         return "\n".join(lines)
 
     @staticmethod
-    def render_table(records: list[MemberAuditRecord]) -> str:
+    def render_table(records: list[MemberAuditRecord], utilization_mode: bool = False) -> str:
         if not records:
             return "(no matching members found)"
 
-        sorted_records = sorted(records, key=lambda r: (r.full_name.casefold(), r.email.casefold()))
-        headers = ["Email", "Name", "Tier", "Type", "Status", "Departed", "Term Date", "Risk"]
-        rows = []
-        for r in sorted_records:
-            rows.append([
-                r.email,
-                r.full_name[:24],
-                r.license_type,
-                r.member_type[:14],
-                r.sigma_status,
-                "YES" if r.is_departed else "NO",
-                r.termination_date or "-",
-                r.risk_level,
-            ])
+        if utilization_mode:
+            def util_sort_key(r: MemberAuditRecord):
+                status_order = {
+                    "DORMANT": 0,
+                    "UNDERUTILIZED_BUILD": 1,
+                    "DEPARTED": 2,
+                    "INACTIVE_PAID": 3,
+                    "ACTIVE_BUILDER": 4,
+                    "ACTIVE_ANALYST": 5,
+                    "FREE_VIEW": 6,
+                    "UNKNOWN": 7,
+                }
+                return (status_order.get(r.utilization_status, 9), r.full_name.casefold(), r.email.casefold())
+
+            sorted_records = sorted(records, key=util_sort_key)
+            headers = ["Email", "Name", "Tier", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
+            rows = []
+            for r in sorted_records:
+                rows.append([
+                    r.email,
+                    r.full_name[:22],
+                    r.license_type,
+                    format_ts_date(r.last_activity),
+                    format_ts_date(r.last_edit),
+                    str(r.total_events),
+                    r.utilization_status,
+                    r.recommendation,
+                ])
+        else:
+            sorted_records = sorted(records, key=lambda r: (r.full_name.casefold(), r.email.casefold()))
+            headers = ["Email", "Name", "Tier", "Type", "Status", "Departed", "Term Date", "Risk"]
+            rows = []
+            for r in sorted_records:
+                rows.append([
+                    r.email,
+                    r.full_name[:24],
+                    r.license_type,
+                    r.member_type[:14],
+                    r.sigma_status,
+                    "YES" if r.is_departed else "NO",
+                    r.termination_date or "-",
+                    r.risk_level,
+                ])
 
         col_widths = [len(h) for h in headers]
         for row in rows:
@@ -613,6 +760,7 @@ class AuditReporter:
     def render_json(records: list[MemberAuditRecord], summary_only: bool = False) -> str:
         departed = [r for r in records if r.is_departed]
         departed_active_paid = [r for r in departed if r.sigma_status == "active" and r.is_paid]
+        paid_in_use = [r for r in records if r.sigma_status == "active" and r.is_paid]
         payload: dict[str, Any] = {
             "summary": {
                 "total": len(records),
@@ -626,6 +774,14 @@ class AuditReporter:
                     "Analyze": sum(1 for r in departed_active_paid if r.license_type == "Analyze"),
                     "Act": sum(1 for r in departed_active_paid if r.license_type == "Act"),
                 },
+                "utilization": {
+                    "activePaidTotal": len(paid_in_use),
+                    "activeBuilders": sum(1 for r in paid_in_use if r.utilization_status == "ACTIVE_BUILDER"),
+                    "activeAnalysts": sum(1 for r in paid_in_use if r.utilization_status == "ACTIVE_ANALYST"),
+                    "underutilizedBuilders": sum(1 for r in paid_in_use if r.utilization_status == "UNDERUTILIZED_BUILD"),
+                    "dormantPaid": sum(1 for r in paid_in_use if r.utilization_status == "DORMANT"),
+                    "departedPaid": sum(1 for r in paid_in_use if r.utilization_status == "DEPARTED"),
+                },
             }
         }
         if not summary_only:
@@ -638,12 +794,16 @@ class AuditReporter:
         writer = csv.writer(buf)
         writer.writerow([
             "email", "fullName", "licenseType", "memberType", "isPaid",
-            "sigmaStatus", "isDeparted", "terminationDate", "riskLevel", "memberId"
+            "sigmaStatus", "isDeparted", "terminationDate", "riskLevel",
+            "lastActivity", "lastLogin", "lastOpened", "lastEdit", "totalEvents",
+            "utilizationStatus", "recommendation", "memberId"
         ])
         for r in records:
             writer.writerow([
                 r.email, r.full_name, r.license_type, r.member_type, r.is_paid,
-                r.sigma_status, r.is_departed, r.termination_date, r.risk_level, r.member_id
+                r.sigma_status, r.is_departed, r.termination_date, r.risk_level,
+                r.last_activity, r.last_login, r.last_opened, r.last_edit, r.total_events,
+                r.utilization_status, r.recommendation, r.member_id
             ])
         return buf.getvalue().strip()
 
@@ -662,6 +822,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--search", help="Search filter by name or email.")
     parser.add_argument("--refresh", action="store_true", help="Force refresh Snowflake ADP worker cache.")
     parser.add_argument("--user", action="append", dest="users", help="Target specific user email(s).")
+    parser.add_argument("--activity-file", type=Path, default=DEFAULT_ACTIVITY_CACHE_FILE, help="Path to Sigma user activity cache JSON.")
+    parser.add_argument("--utilization", action="store_true", help="Show paid license utilization and activity table.")
+    parser.add_argument("--dormant-only", action="store_true", help="Filter to dormant paid users (0 activity in 30 days).")
+    parser.add_argument("--underutilized-only", action="store_true", help="Filter to view-only Builders (0 edits in 30 days).")
 
     # Remediation actions
     parser.add_argument("--downgrade-to-view", action="store_true", help="Downgrade targeted users to View account type.")
@@ -879,26 +1043,39 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
     while True:
         departed = [r for r in records if r.is_departed]
         departed_active_paid = [r for r in departed if r.sigma_status == "active" and r.is_paid]
+        paid_active = [r for r in records if r.sigma_status == "active" and r.is_paid]
+        dormant_paid = [r for r in paid_active if r.utilization_status == "DORMANT"]
+        underutilized_build = [r for r in paid_active if r.utilization_status == "UNDERUTILIZED_BUILD"]
 
         print("\n" + AuditReporter.render_summary(records))
         print("\nChoose an option:")
         print("  1. List departed employees with active PAID licenses (CRITICAL)")
-        print("  2. List all departed employees in Sigma")
-        print("  3. Downgrade active departed paid users to View (dry-run preview)")
-        print("  4. Batch deactivate active departed users (dry-run preview)")
-        print("  5. Deactivate one-by-one (interactive step-through or pick user)")
-        print("  6. Custom search user")
-        print("  7. Export audit to CSV /tmp/sigma_departed_audit.csv")
+        print("  2. Paid license utilization & activity (all active paid seats)")
+        print("  3. List dormant paid seats (0 activity in 30 days)")
+        print("  4. List view-only Builders (holding Build tier but 0 edits)")
+        print("  5. List all departed employees in Sigma")
+        print("  6. Downgrade active departed paid users to View (dry-run preview)")
+        print("  7. Downgrade dormant paid users to View (dry-run preview)")
+        print("  8. Batch deactivate active departed users (dry-run preview)")
+        print("  9. Deactivate one-by-one (interactive step-through or pick user)")
+        print("  10. Custom search user")
+        print("  11. Export audit to CSV /tmp/sigma_departed_audit.csv")
         print("  q. Quit")
 
-        choice = input("\nEnter choice [1-7, q]: ").strip()
+        choice = input("\nEnter choice [1-11, q]: ").strip()
         if choice in ("q", "quit", "exit"):
             return 0
         elif choice == "1":
             print(AuditReporter.render_table(departed_active_paid))
         elif choice == "2":
-            print(AuditReporter.render_table(departed))
+            print(AuditReporter.render_table(paid_active, utilization_mode=True))
         elif choice == "3":
+            print(AuditReporter.render_table(dormant_paid, utilization_mode=True))
+        elif choice == "4":
+            print(AuditReporter.render_table(underutilized_build, utilization_mode=True))
+        elif choice == "5":
+            print(AuditReporter.render_table(departed))
+        elif choice == "6":
             run_remediation_plan(
                 client=client,
                 targets=departed_active_paid,
@@ -909,7 +1086,18 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
                 execute=False,
                 auto_confirm=False,
             )
-        elif choice == "4":
+        elif choice == "7":
+            run_remediation_plan(
+                client=client,
+                targets=dormant_paid,
+                downgrade=True,
+                deactivate=False,
+                new_owner_email=None,
+                archive_docs=False,
+                execute=False,
+                auto_confirm=False,
+            )
+        elif choice == "8":
             owner = input("Enter destination email for reassigned documents (or 'archive'): ").strip()
             if owner:
                 archive_docs = owner.lower() == "archive"
@@ -923,13 +1111,13 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
                     execute=False,
                     auto_confirm=False,
                 )
-        elif choice == "5":
+        elif choice == "9":
             interactive_deactivate_one_by_one(records, client)
-        elif choice == "6":
+        elif choice == "10":
             term = input("Search query: ").strip().lower()
             matches = [r for r in records if term in r.email.lower() or term in r.full_name.lower()]
             print(AuditReporter.render_table(matches))
-        elif choice == "7":
+        elif choice == "11":
             csv_path = Path("/tmp/sigma_departed_audit.csv")
             csv_path.write_text(AuditReporter.render_csv(records), encoding="utf-8")
             print(f"Exported {len(records)} records to {csv_path}")
@@ -960,8 +1148,11 @@ def main() -> int:
         print(f"ERROR querying Snowflake ADP: {exc}", file=sys.stderr)
         return 1
 
+    # Load activity store
+    activities = ActivityStore.load_cached(cache_file=args.activity_file)
+
     # Build audit records
-    records = build_audit_records(raw_members, departed_workers, type_to_tier)
+    records = build_audit_records(raw_members, departed_workers, type_to_tier, activities=activities)
 
     # Interactive mode check
     if args.interactive or (len(sys.argv) == 1 and sys.stdin.isatty()):
@@ -969,7 +1160,11 @@ def main() -> int:
 
     # Filtering
     filtered = records
-    if not args.all_members and not args.users:
+    is_util_mode = args.utilization or args.dormant_only or args.underutilized_only
+
+    if is_util_mode and not args.all_members and not args.users:
+        filtered = [r for r in filtered if r.sigma_status == "active" and r.is_paid]
+    elif not args.all_members and not args.users:
         filtered = [r for r in filtered if r.is_departed]
 
     if args.users:
@@ -981,6 +1176,12 @@ def main() -> int:
 
     if args.active_only:
         filtered = [r for r in filtered if r.sigma_status == "active"]
+
+    if args.dormant_only:
+        filtered = [r for r in filtered if r.utilization_status == "DORMANT"]
+
+    if args.underutilized_only:
+        filtered = [r for r in filtered if r.utilization_status == "UNDERUTILIZED_BUILD"]
 
     if args.status != "all":
         filtered = [r for r in filtered if r.sigma_status == args.status]
@@ -1016,7 +1217,7 @@ def main() -> int:
         # Table output prints summary followed by the table
         print(AuditReporter.render_summary(records))
         print("\nFiltered Members:")
-        print(AuditReporter.render_table(filtered))
+        print(AuditReporter.render_table(filtered, utilization_mode=is_util_mode))
 
     return 0
 
