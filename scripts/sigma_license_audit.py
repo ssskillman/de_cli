@@ -319,7 +319,7 @@ class SigmaClient:
 
 class SnowflakeWorkerStore:
     SQL_DEPARTED = """
-WITH adp_terms AS (
+WITH adp_workers AS (
     SELECT 
         LOWER(TRIM(b.EMAIL_URI)) as email,
         MAX(ph.LEGAL_NAME_FORMATTED_NAME) as full_name,
@@ -334,21 +334,34 @@ WITH adp_terms AS (
     WHERE b.EMAIL_URI IS NOT NULL AND b.EMAIL_URI LIKE '%@%'
     GROUP BY 1
 ),
+active_adp_emails AS (
+    SELECT email FROM adp_workers WHERE has_active_record
+),
 okta_terms AS (
     SELECT 
         LOWER(TRIM(PROFILE_EMAIL)) as email,
         MAX(TRIM(CONCAT(COALESCE(PROFILE_FIRST_NAME, ''), ' ', COALESCE(PROFILE_LAST_NAME, '')))) as full_name,
         MAX(STATUS_CHANGED::date) as max_term_date,
-        BOOLOR_AGG(STATUS = 'ACTIVE') as has_active_record,
-        BOOLOR_AGG(STATUS IN ('DEPROVISIONED', 'SUSPENDED')) as has_terminated_record
+        BOOLOR_AGG(STATUS = 'ACTIVE' OR STATUS = 'SUSPENDED') as has_active_record,
+        BOOLOR_AGG(STATUS = 'DEPROVISIONED') as has_terminated_record
     FROM FIVETRAN_DB.OKTA.USERS
     WHERE PROFILE_EMAIL IS NOT NULL AND PROFILE_EMAIL LIKE '%@%'
     GROUP BY 1
 ),
 combined AS (
-    SELECT email, full_name, max_term_date FROM adp_terms WHERE has_terminated_record AND NOT has_active_record
+    -- Terminated workers from ADP without active record
+    SELECT email, full_name, max_term_date 
+    FROM adp_workers 
+    WHERE has_terminated_record AND NOT has_active_record
+    
     UNION ALL
-    SELECT email, full_name, max_term_date FROM okta_terms WHERE has_terminated_record AND NOT has_active_record
+    
+    -- Deprovisioned users from Okta (excluding anyone with active ADP employment)
+    SELECT email, full_name, max_term_date 
+    FROM okta_terms 
+    WHERE has_terminated_record 
+      AND NOT has_active_record
+      AND email NOT IN (SELECT email FROM active_adp_emails)
 )
 SELECT 
     email, 
