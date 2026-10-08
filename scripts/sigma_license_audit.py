@@ -122,6 +122,8 @@ class MemberAuditRecord:
     adp_name: str = ""
     is_paid: bool = False
     risk_level: str = "NONE"  # CRITICAL, HIGH, MEDIUM, LOW, CLEAN
+    created_at: str = ""
+    days_since_created: int | None = None
     last_activity: str = ""
     last_login: str = ""
     last_opened: str = ""
@@ -603,6 +605,16 @@ def build_audit_records(
         last_edit = act.last_edit if act else ""
         total_events = act.total_events if act else 0
 
+        created_at = str(raw.get("createdAt") or "").strip()
+        days_since_created = None
+        if created_at:
+            try:
+                clean_c = created_at.replace("Z", "+00:00")
+                dt_c = datetime.fromisoformat(clean_c)
+                days_since_created = max(0, (datetime.now(timezone.utc) - dt_c).days)
+            except Exception:
+                pass
+
         if is_departed:
             utilization_status = "DEPARTED"
             recommendation = "Deactivate" if sigma_status == "active" else "—"
@@ -642,6 +654,8 @@ def build_audit_records(
             adp_name=departed_info.full_name if departed_info else "",
             is_paid=is_paid,
             risk_level=risk_level,
+            created_at=created_at,
+            days_since_created=days_since_created,
             last_activity=last_activity,
             last_login=last_login,
             last_opened=last_opened,
@@ -662,6 +676,12 @@ def format_ts_date(ts: str) -> str:
     if " " in clean:
         return clean.split(" ", 1)[0]
     return clean[:10]
+
+
+def format_days_elapsed(days: int | None) -> str:
+    if days is None:
+        return "-"
+    return f"{days}d"
 
 
 class AuditReporter:
@@ -740,13 +760,15 @@ class AuditReporter:
                 return (1, -epoch, r.email.casefold())
 
             sorted_records = sorted(records, key=util_sort_key)
-            headers = ["Email", "Name", "Tier", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
+            headers = ["Email", "Name", "Tier", "Invited", "Days", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
             rows = []
             for r in sorted_records:
                 rows.append([
                     r.email,
                     r.full_name[:22],
                     r.license_type,
+                    format_ts_date(r.created_at),
+                    format_days_elapsed(r.days_since_created),
                     format_ts_date(r.last_activity),
                     format_ts_date(r.last_edit),
                     str(r.total_events),
@@ -825,6 +847,7 @@ class AuditReporter:
         writer.writerow([
             "email", "fullName", "licenseType", "memberType", "isPaid",
             "sigmaStatus", "isDeparted", "terminationDate", "riskLevel",
+            "invitedAt", "daysElapsed",
             "lastActivity", "lastLogin", "lastOpened", "lastEdit", "totalEvents",
             "utilizationStatus", "recommendation", "memberId"
         ])
@@ -832,6 +855,7 @@ class AuditReporter:
             writer.writerow([
                 r.email, r.full_name, r.license_type, r.member_type, r.is_paid,
                 r.sigma_status, r.is_departed, r.termination_date, r.risk_level,
+                r.created_at, r.days_since_created if r.days_since_created is not None else "",
                 r.last_activity, r.last_login, r.last_opened, r.last_edit, r.total_events,
                 r.utilization_status, r.recommendation, r.member_id
             ])

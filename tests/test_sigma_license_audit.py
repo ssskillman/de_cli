@@ -603,6 +603,8 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIn("Utilization", table)
         self.assertIn("Recommendation", table)
         self.assertIn("Events", table)
+        self.assertIn("Invited", table)
+        self.assertIn("Days", table)
         self.assertIn("DORMANT", table)
         self.assertIn("UNDERUTILIZED_BUILD", table)
         self.assertIn("ACTIVE_BUILDER", table)
