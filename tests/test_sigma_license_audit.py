@@ -23,6 +23,7 @@ ActivityStore = MODULE.ActivityStore
 run_remediation_plan = MODULE.run_remediation_plan
 BrailleSpinner = MODULE.BrailleSpinner
 fzf_pick_choice = MODULE.fzf_pick_choice
+fzf_pick_multi = MODULE.fzf_pick_multi
 
 
 class FakeSigmaClient:
@@ -750,6 +751,51 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         with patch("shutil.which", return_value=None), patch("builtins.input", return_value="q"):
             res = fzf_pick_choice(entries, prompt="pick> ", header="Choose")
             self.assertEqual(res, "q")
+
+    def test_fzf_pick_multi_fallback(self):
+        from unittest.mock import patch
+        entries = [("ALL", "ALL"), ("Act", "Act type"), ("build", "build type")]
+        # Comma-separated choice
+        with patch("shutil.which", return_value=None), patch("builtins.input", return_value="2,3"):
+            res = fzf_pick_multi(entries, prompt="pick> ", header="Choose")
+            self.assertEqual(res, ["Act", "build"])
+
+        # 'all' choice
+        with patch("shutil.which", return_value=None), patch("builtins.input", return_value="all"):
+            res = fzf_pick_multi(entries, prompt="pick> ", header="Choose")
+            self.assertEqual(res, ["ALL", "Act", "build"])
+
+        # cancel / empty
+        with patch("shutil.which", return_value=None), patch("builtins.input", return_value=""):
+            res = fzf_pick_multi(entries, prompt="pick> ", header="Choose")
+            self.assertEqual(res, [])
+
+    def test_render_table_contains_type_column(self):
+        records = [
+            MemberAuditRecord(
+                email="andre.gomes@iterable.com",
+                member_id="m-1",
+                first_name="Andre",
+                last_name="Gomes",
+                member_type="Act",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+                is_paid=True,
+                risk_level="LOW",
+                last_activity="2026-10-08T12:00:00Z",
+                utilization_status="UNDERUTILIZED_BUILD",
+                recommendation="Downgrade (View / Analyze)",
+            )
+        ]
+        table = AuditReporter.render_table(records, utilization_mode=True)
+        self.assertIn("Type", table)
+        self.assertIn("Tier", table)
+        self.assertIn("Build", table)
+        self.assertIn("Act", table)
 
 
 if __name__ == "__main__":

@@ -762,7 +762,7 @@ class AuditReporter:
                 return (1, -epoch, r.email.casefold())
 
             sorted_records = sorted(records, key=util_sort_key)
-            headers = ["#", "Email", "Name", "Tier", "Invited", "Days", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
+            headers = ["#", "Email", "Name", "Tier", "Type", "Invited", "Days", "Last Active", "Last Edit", "Events", "Utilization", "Recommendation"]
             rows = []
             for idx, r in enumerate(sorted_records, 1):
                 rows.append([
@@ -770,6 +770,7 @@ class AuditReporter:
                     r.email,
                     r.full_name[:22],
                     r.license_type,
+                    r.member_type[:12],
                     format_ts_date(r.created_at),
                     format_days_elapsed(r.days_since_created),
                     format_ts_date(r.last_activity),
@@ -890,6 +891,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--utilization", action="store_true", help="Show paid license utilization and activity table.")
     parser.add_argument("--dormant-only", action="store_true", help="Filter to dormant paid users (0 activity in 30 days).")
     parser.add_argument("--underutilized-only", action="store_true", help="Filter to view-only Builders (0 edits in 30 days).")
+    parser.add_argument("--account-type", action="append", dest="account_types", help="Filter by Sigma account type (e.g. Act, build, admin, View). Repeatable.")
+    parser.add_argument("--tier", "--license-type", action="append", dest="license_types", help="Filter by Sigma billed license tier (Build, Analyze, Act, View). Repeatable.")
+    parser.add_argument("--employee-type", action="append", dest="employee_types", choices=["active", "departed", "guest", "embed", "all"], help="Filter by employee type (active, departed, guest, embed, all). Repeatable.")
 
     # Remediation actions
     parser.add_argument("--downgrade-to-view", action="store_true", help="Downgrade targeted users to View account type.")
@@ -993,6 +997,73 @@ def fzf_pick_choice(
     if ans.isdigit() and 1 <= int(ans) <= len(entries):
         return entries[int(ans) - 1][0]
     return None
+
+
+def fzf_pick_multi(
+    entries: list[tuple[str, str]],
+    *,
+    prompt: str = "select > ",
+    header: str = "",
+    height: str = "45%",
+) -> list[str]:
+    if not entries:
+        return []
+    if shutil.which("fzf") and sys.stdin.isatty():
+        lines = [f"{key}\t{label}" for key, label in entries]
+        cmd = [
+            "fzf",
+            "--ansi",
+            "--no-mouse",
+            "--multi",
+            "--bind=ctrl-a:select-all,ctrl-d:deselect-all",
+            f"--height={height}",
+            "--reverse",
+            "--border=rounded",
+            "--cycle",
+            "--delimiter=\t",
+            "--with-nth=2",
+            f"--prompt={prompt}",
+            "--pointer=▶",
+            "--marker=◉ ",
+            f"--header={header}",
+            "--footer=Tab=toggle · Ctrl-A=all · Enter=confirm · Esc=cancel",
+        ]
+        proc = subprocess.run(
+            cmd,
+            input="\n".join(lines) + "\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            selected = []
+            for line in proc.stdout.splitlines():
+                if "\t" in line:
+                    selected.append(line.split("\t", 1)[0].strip())
+                elif line.strip():
+                    selected.append(line.strip())
+            return selected
+        return []
+
+    # Numbered fallback if fzf/tty unavailable
+    if header:
+        print(f"\n{header}")
+    for idx, (key, label) in enumerate(entries, 1):
+        print(f"  {idx}. {label}")
+    print("  (comma-separated numbers or 'all', empty to cancel)")
+    ans = input(f"\n{prompt}").strip().lower()
+    if not ans or ans in ("q", "quit", "cancel", "esc"):
+        return []
+    if ans == "all":
+        return [k for k, _ in entries]
+    chosen = []
+    for part in ans.split(","):
+        p = part.strip()
+        if p.isdigit() and 1 <= int(p) <= len(entries):
+            chosen.append(entries[int(p) - 1][0])
+        elif p in {k.lower() for k, _ in entries}:
+            chosen.append(next(k for k, _ in entries if k.lower() == p))
+    return chosen
 
 
 def run_remediation_plan(
@@ -1257,6 +1328,105 @@ def interactive_deactivate_one_by_one(records: list[MemberAuditRecord], client: 
     )
 
 
+def interactive_build_report(records: list[MemberAuditRecord]) -> None:
+    # 1. Account type
+    acct_types = sorted({r.member_type for r in records if r.member_type}, key=str.casefold)
+    acct_entries = [("ALL", "ALL — All account types")] + [(t, f"{t:<14} account type") for t in acct_types]
+    selected_acct = fzf_pick_multi(
+        acct_entries,
+        prompt="account type > ",
+        header="Step 1/3: Select Account Type(s) · TAB multi-select · Ctrl-A all · Enter confirm · Esc cancel",
+        height="45%",
+    )
+    if not selected_acct:
+        print("Cancelled.")
+        return
+
+    # 2. License tier
+    tier_entries = [
+        ("ALL", "ALL — All license tiers"),
+        ("Build", "Build tier (Authoring, SQL, dashboards, manage-users)"),
+        ("Analyze", "Analyze tier (Exploration, AI formulas, exports)"),
+        ("Act", "Act tier (Actions, recipient exports)"),
+        ("View", "View tier (Read-only viewers)"),
+    ]
+    selected_tiers = fzf_pick_multi(
+        tier_entries,
+        prompt="license tier > ",
+        header="Step 2/3: Select License Tier(s) · TAB multi-select · Ctrl-A all · Enter confirm · Esc cancel",
+        height="40%",
+    )
+    if not selected_tiers:
+        print("Cancelled.")
+        return
+
+    # 3. Employee type
+    emp_entries = [
+        ("ALL", "ALL — All employee / user kinds"),
+        ("active", "Active Employee — Currently employed at company (internal)"),
+        ("departed", "Departed Employee — Terminated in ADP / Okta"),
+        ("guest", "Guest User — External collaborator in Sigma"),
+        ("embed", "Embed Account — Automated service / embed user"),
+    ]
+    selected_emp = fzf_pick_multi(
+        emp_entries,
+        prompt="employee type > ",
+        header="Step 3/3: Select Employee Type(s) · TAB multi-select · Ctrl-A all · Enter confirm · Esc cancel",
+        height="40%",
+    )
+    if not selected_emp:
+        print("Cancelled.")
+        return
+
+    filtered = records
+
+    if "ALL" not in selected_acct:
+        acct_set = {a.lower() for a in selected_acct}
+        filtered = [r for r in filtered if r.member_type.lower() in acct_set]
+
+    if "ALL" not in selected_tiers:
+        tier_set = {t.lower() for t in selected_tiers}
+        filtered = [r for r in filtered if r.license_type.lower() in tier_set]
+
+    if "ALL" not in selected_emp:
+        emp_set = set(selected_emp)
+
+        def match_emp(r: MemberAuditRecord) -> bool:
+            if "active" in emp_set and not r.is_departed and r.user_kind == "internal":
+                return True
+            if "departed" in emp_set and r.is_departed:
+                return True
+            if "guest" in emp_set and r.user_kind == "guest":
+                return True
+            if "embed" in emp_set and r.user_kind == "embed":
+                return True
+            return False
+
+        filtered = [r for r in filtered if match_emp(r)]
+
+    acct_label = "ALL" if "ALL" in selected_acct else ", ".join(selected_acct)
+    tier_label = "ALL" if "ALL" in selected_tiers else ", ".join(selected_tiers)
+    emp_label = "ALL" if "ALL" in selected_emp else ", ".join(selected_emp)
+
+    print("\n" + "=" * 60)
+    print("                    CUSTOM BUILT REPORT                    ")
+    print("=" * 60)
+    print("Filters applied:")
+    print(f"  • Account Type:   {acct_label}")
+    print(f"  • License Tier:   {tier_label}")
+    print(f"  • Employee Type:  {emp_label}")
+    print(f"  • Total Matches:  {len(filtered)}")
+    print("=" * 60 + "\n")
+
+    print(AuditReporter.render_table(filtered, utilization_mode=True))
+
+    ans = input("\nPress Enter to return to menu (or type 'csv' to export to /tmp/custom_report.csv): ").strip().lower()
+    if ans in ("csv", "export"):
+        csv_path = Path("/tmp/custom_report.csv")
+        csv_path.write_text(AuditReporter.render_csv(filtered), encoding="utf-8")
+        print(f"Exported {len(filtered)} records to {csv_path}")
+
+
 def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> int:
     while True:
         departed = [r for r in records if r.is_departed]
@@ -1279,6 +1449,7 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
             ("9", "9. Deactivate one-by-one (interactive step-through or pick user)"),
             ("10", "10. Custom search user"),
             ("11", "11. Export audit to CSV /tmp/sigma_departed_audit.csv"),
+            ("12", "12. Build a report (custom multi-select: Account, License, & Employee type)"),
             ("q", "q. Quit"),
         ]
 
@@ -1375,6 +1546,8 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
             csv_path.write_text(AuditReporter.render_csv(records), encoding="utf-8")
             print(f"Exported {len(records)} records to {csv_path}")
             input("\nPress Enter to return to menu...")
+        elif choice == "12":
+            interactive_build_report(records)
 
 
 def main() -> int:
@@ -1414,16 +1587,42 @@ def main() -> int:
 
     # Filtering
     filtered = records
-    is_util_mode = args.utilization or args.dormant_only or args.underutilized_only
+    is_custom_filter = bool(args.account_types or args.license_types or args.employee_types)
+    is_util_mode = args.utilization or args.dormant_only or args.underutilized_only or is_custom_filter
 
-    if is_util_mode and not args.all_members and not args.users:
+    if is_util_mode and not args.all_members and not args.users and not is_custom_filter:
         filtered = [r for r in filtered if r.sigma_status == "active" and r.is_paid]
-    elif not args.all_members and not args.users:
+    elif not args.all_members and not args.users and not is_custom_filter:
         filtered = [r for r in filtered if r.is_departed]
 
     if args.users:
         user_set = {u.strip().lower() for u in args.users}
         filtered = [r for r in filtered if r.email in user_set]
+
+    if args.account_types:
+        acct_set = {a.strip().lower() for a in args.account_types}
+        filtered = [r for r in filtered if r.member_type.lower() in acct_set]
+
+    if args.license_types:
+        tier_set = {t.strip().lower() for t in args.license_types}
+        filtered = [r for r in filtered if r.license_type.lower() in tier_set]
+
+    if args.employee_types:
+        emp_set = set(args.employee_types)
+        if "all" not in emp_set:
+
+            def match_cli_emp(r: MemberAuditRecord) -> bool:
+                if "active" in emp_set and not r.is_departed and r.user_kind == "internal":
+                    return True
+                if "departed" in emp_set and r.is_departed:
+                    return True
+                if "guest" in emp_set and r.user_kind == "guest":
+                    return True
+                if "embed" in emp_set and r.user_kind == "embed":
+                    return True
+                return False
+
+            filtered = [r for r in filtered if match_cli_emp(r)]
 
     if args.paid_only:
         filtered = [r for r in filtered if r.is_paid]
