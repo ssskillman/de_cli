@@ -742,10 +742,14 @@ class SigmaLicenseAuditTests(unittest.TestCase):
 
     def test_fzf_pick_choice_fallback(self):
         from unittest.mock import patch
-        entries = [("opt1", "Option 1"), ("opt2", "Option 2")]
-        with patch("shutil.which", return_value=None), patch("builtins.input", return_value="2"):
+        entries = [("1", "1. Option One"), ("10", "10. Option Ten"), ("q", "q. Quit")]
+        with patch("shutil.which", return_value=None), patch("builtins.input", return_value="10"):
             res = fzf_pick_choice(entries, prompt="pick> ", header="Choose")
-            self.assertEqual(res, "opt2")
+            self.assertEqual(res, "10")
+
+        with patch("shutil.which", return_value=None), patch("builtins.input", return_value="q"):
+            res = fzf_pick_choice(entries, prompt="pick> ", header="Choose")
+            self.assertEqual(res, "q")
 
 
 if __name__ == "__main__":

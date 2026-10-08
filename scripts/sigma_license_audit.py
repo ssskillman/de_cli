@@ -950,6 +950,7 @@ def fzf_pick_choice(
     *,
     prompt: str = "action > ",
     header: str = "",
+    height: str = "40%",
 ) -> str | None:
     if not entries:
         return None
@@ -959,7 +960,7 @@ def fzf_pick_choice(
             "fzf",
             "--ansi",
             "--no-mouse",
-            "--height=40%",
+            f"--height={height}",
             "--reverse",
             "--border=rounded",
             "--cycle",
@@ -982,10 +983,13 @@ def fzf_pick_choice(
         return None
 
     # Numbered fallback if fzf/tty unavailable
-    print(f"\n{header}")
+    if header:
+        print(f"\n{header}")
     for idx, (key, label) in enumerate(entries, 1):
-        print(f"  {idx}. {label}")
-    ans = input(f"\n{prompt}").strip()
+        print(f"  {label}")
+    ans = input(f"\n{prompt}").strip().lower()
+    if ans in {k.lower() for k, _ in entries}:
+        return next(k for k, _ in entries if k.lower() == ans)
     if ans.isdigit() and 1 <= int(ans) <= len(entries):
         return entries[int(ans) - 1][0]
     return None
@@ -1178,20 +1182,24 @@ def run_remediation_plan(
 
 
 def interactive_deactivate_one_by_one(records: list[MemberAuditRecord], client: SigmaClient) -> None:
-    print("\nSelect target group for one-by-one deactivation:")
-    print("  1. Active departed users with PAID licenses (CRITICAL seats)")
-    print("  2. Pick specific user by email or name")
-    print("  3. All active departed users in Sigma")
-    print("  q. Cancel")
-
-    sel = input("\nChoice [1-3, q]: ").strip().lower()
-    if sel in ("q", "quit", "exit", ""):
+    sel = fzf_pick_choice(
+        [
+            ("1", "1. Active departed users with PAID licenses (CRITICAL seats)"),
+            ("2", "2. Pick specific user by email or name"),
+            ("3", "3. All active departed users in Sigma"),
+            ("q", "q. Cancel"),
+        ],
+        prompt="target > ",
+        header="Select target group for one-by-one deactivation · pick option",
+        height="35%",
+    )
+    if not sel or sel in ("q", "quit", "exit"):
         return
 
     if sel == "1":
         targets = [r for r in records if r.is_departed and r.sigma_status == "active" and r.is_paid]
     elif sel == "2":
-        q = input("Search email or name: ").strip().lower()
+        q = input("\nSearch email or name: ").strip().lower()
         if not q:
             return
         matches = [r for r in records if q in r.email.lower() or q in r.full_name.lower()]
@@ -1201,17 +1209,22 @@ def interactive_deactivate_one_by_one(records: list[MemberAuditRecord], client: 
         if len(matches) == 1:
             targets = matches
         else:
-            print(f"\nFound {len(matches)} matches:")
-            for i, m in enumerate(matches, 1):
-                print(f"  {i}. {m.full_name} <{m.email}> [{m.license_type}, {m.sigma_status}]")
-            pick = input(f"Pick user [1-{len(matches)}, q]: ").strip()
-            if not pick.isdigit() or not (1 <= int(pick) <= len(matches)):
+            user_entries = [
+                (m.email, f"{m.full_name:<24}  <{m.email}>  [{m.license_type}, {m.sigma_status}]")
+                for m in matches
+            ]
+            picked = fzf_pick_choice(
+                user_entries,
+                prompt="user > ",
+                header=f"Found {len(matches)} matching users · pick user",
+                height="45%",
+            )
+            if not picked:
                 return
-            targets = [matches[int(pick) - 1]]
+            targets = [m for m in matches if m.email == picked]
     elif sel == "3":
         targets = [r for r in records if r.is_departed and r.sigma_status == "active"]
     else:
-        print("Invalid choice.")
         return
 
     if not targets:
@@ -1253,22 +1266,30 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
         underutilized_build = [r for r in paid_active if r.utilization_status == "UNDERUTILIZED_BUILD"]
 
         print("\n" + AuditReporter.render_summary(records))
-        print("\nChoose an option:")
-        print("  1. List departed employees with active PAID licenses (CRITICAL)")
-        print("  2. Paid license utilization & activity (all active paid seats)")
-        print("  3. List dormant paid seats (0 activity in 30 days)")
-        print("  4. List view-only Builders (holding Build tier but 0 edits)")
-        print("  5. List all departed employees in Sigma")
-        print("  6. Downgrade active departed paid users to View (dry-run preview)")
-        print("  7. Downgrade dormant paid users to View (dry-run preview or full prod send it)")
-        print("  8. Batch deactivate active departed users (dry-run preview)")
-        print("  9. Deactivate one-by-one (interactive step-through or pick user)")
-        print("  10. Custom search user")
-        print("  11. Export audit to CSV /tmp/sigma_departed_audit.csv")
-        print("  q. Quit")
 
-        choice = input("\nEnter choice [1-11, q]: ").strip()
-        if choice in ("q", "quit", "exit"):
+        menu_entries = [
+            ("1", "1. List departed employees with active PAID licenses (CRITICAL)"),
+            ("2", "2. Paid license utilization & activity (all active paid seats)"),
+            ("3", "3. List dormant paid seats (0 activity in 30 days)"),
+            ("4", "4. List view-only Builders (holding Build tier but 0 edits)"),
+            ("5", "5. List all departed employees in Sigma"),
+            ("6", "6. Downgrade active departed paid users to View (dry-run preview)"),
+            ("7", "7. Downgrade dormant paid users to View (dry-run preview or full prod send it)"),
+            ("8", "8. Batch deactivate active departed users (dry-run preview)"),
+            ("9", "9. Deactivate one-by-one (interactive step-through or pick user)"),
+            ("10", "10. Custom search user"),
+            ("11", "11. Export audit to CSV /tmp/sigma_departed_audit.csv"),
+            ("q", "q. Quit"),
+        ]
+
+        choice = fzf_pick_choice(
+            menu_entries,
+            prompt="option > ",
+            header="Choose an option · ↑/↓ navigate · type to filter · Enter select · Esc quit",
+            height="55%",
+        )
+
+        if not choice or choice in ("q", "quit", "exit"):
             return 0
         elif choice == "1":
             print(AuditReporter.render_table(departed_active_paid))
