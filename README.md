@@ -30,7 +30,7 @@ de fivetran-transformations      # fzf: pick a transformation, Enter runs it
 de transformations list          # name / type / status / destination
 de sf-opp-query            # SF Opp SOQL — human/csv/json (+ --pin)
 de daily-pulse             # bi-applications dry-run digest (Platforms → BI Apps)
-de daily-pulse-smoke-est   # post smoke to #daily_pulse_est (confirm in menu)
+de daily-pulse-smoke-est   # post smoke to #daily_pulse_est (menu runs immediately when SLACK_BOT_TOKEN is in .env)
 de pulse --hours 48        # dry-run, 48h window
 de opp-formula-refresh --limit 10 --open-only --write-snowflake
 de netlify-prod-deploy     # cd salt_app && netlify_prod_deploy

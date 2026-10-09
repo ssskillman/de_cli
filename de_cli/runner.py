@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .banner import print_banner
-from .menu_confirm import confirm_menu_run
+from .menu_confirm import confirm_menu_run, daily_pulse_smoke_ready
 from .menu_guide import group_blurb, print_menu_groups_guide
 from .menu_groups import (
     breadcrumb,
@@ -395,7 +395,14 @@ def interactive_menu(
             continue
 
         console.print(f"[bold]{breadcrumb(group, tool.name)}[/bold]")
-        if tool.menu_hint and group not in {RECENT_KEY, PINNED_KEY}:
+        hide_token_hint = (
+            tool.name == "daily-pulse-smoke-est" and daily_pulse_smoke_ready()
+        )
+        if (
+            tool.menu_hint
+            and group not in {RECENT_KEY, PINNED_KEY}
+            and not hide_token_hint
+        ):
             console.print(f"[yellow]{tool.menu_hint}[/yellow]")
         if not confirm_menu_run(tool):
             continue
