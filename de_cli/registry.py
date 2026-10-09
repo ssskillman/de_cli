@@ -390,6 +390,22 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sigma-wb-list",),
     ),
     Tool(
+        name="sigma-search-workbooks",
+        description=(
+            "Search Sigma workbooks by name. "
+            "* and ? are wildcards. Plain text matches anywhere in the name. "
+            "No args prompts for the pattern."
+        ),
+        menu_summary="Search workbooks by name (* and ? wildcards)",
+        menu_hint="Case-insensitive. Plain text matches anywhere. --include-archived adds archived.",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_search_workbooks.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-find-workbook", "find-workbook"),
+    ),
+    Tool(
         name="sigma-move-workbooks",
         description=(
             "Move selected Sigma workbooks between folders/workspaces. "

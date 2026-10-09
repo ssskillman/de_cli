@@ -22,8 +22,9 @@ GROUP_BLURBS: dict[str, str] = {
         "Uses SF CLI (and Snowflake browser SSO for writes)."
     ),
     "sigma": (
-        "Sigma Computing admin: API CLI, license inventory, workbook lists, "
-        "dataset migration, and user downgrade/deactivate. OAuth via Sigma CLI."
+        "Sigma Computing admin: API CLI, license inventory, workbook search "
+        "and lists, dataset migration, and user downgrade/deactivate. "
+        "OAuth via Sigma CLI."
     ),
     "airflow": (
         "Astronomer / Airflow: list deployments, deploy DAGs to Astro, "
