@@ -351,6 +351,21 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sigma-user-deactivate", "deactivate-sigma-user"),
     ),
     Tool(
+        name="sigma-reactivate-user",
+        description=(
+            "Reactivate one Sigma user by email. Clears isArchived. "
+            "SCIM-inactive users stay inactive unless you pass --force."
+        ),
+        menu_summary="Reactivate a Sigma user by email",
+        menu_hint="Pass the email. Applies immediately. --force also clears SCIM inactive.",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_reactivate_user.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-reactivate", "reactivate-sigma-user"),
+    ),
+    Tool(
         name="sigma-license-audit",
         description=(
             "Audit Sigma licenses vs Snowflake ADP employee terminations: "

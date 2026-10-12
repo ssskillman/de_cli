@@ -7,7 +7,7 @@ from .registry import Tool, tools_sorted
 # (key, subtitle for fzf row) — default order by typical use; last-used group moves up.
 MENU_GROUPS: tuple[tuple[str, str], ...] = (
     ("sfdc", "Opportunity formulas, CHS → SFDC, SOQL"),
-    ("sigma", "Sigma CLI, licenses, workbook search, datasets, user admin"),
+    ("sigma", "Sigma CLI, licenses, workbook search, datasets, user admin, reactivate"),
     ("airflow", "Astro deployments, DAG deploy, DAG control, user access"),
     ("bi_apps", "Daily Pulse and other bi-applications monorepo tools"),
     ("local", "Local bi-astronomer runners (laptop)"),

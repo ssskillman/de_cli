@@ -23,7 +23,7 @@ GROUP_BLURBS: dict[str, str] = {
     ),
     "sigma": (
         "Sigma Computing admin: API CLI, license inventory, workbook search "
-        "and lists, dataset migration, and user downgrade/deactivate. "
+        "and lists, dataset migration, and user downgrade, deactivate, and reactivate. "
         "OAuth via Sigma CLI."
     ),
     "airflow": (

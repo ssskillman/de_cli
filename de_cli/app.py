@@ -69,6 +69,7 @@ app = typer.Typer(
         "  de sigma api workbooks list --params '{\"limit\":20}'\n"
         "  de sigma-workbooks-list --limit 20\n"
         "  de sigma-search-workbooks 'deliver*'\n"
+        "  de sigma-reactivate-user ada@iterable.com\n"
         "  de sigma-licenses              # fzf menu (summary / report / teams)\n"
         "  de licenses summary            # billed-tier + account-type matrices\n"
         "  de sigma-audit --summary       # audit licenses vs Snowflake ADP terminations\n"
