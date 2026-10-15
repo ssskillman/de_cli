@@ -369,9 +369,10 @@ TOOLS: tuple[Tool, ...] = (
         name="sigma-license-audit",
         description=(
             "Audit Sigma licenses vs Snowflake ADP employee terminations: "
-            "identify departed staff holding paid seats, reclaim licenses, downgrade or deactivate"
+            "identify departed staff holding paid seats, report GTM Team "
+            "(Teri Hatfield), reclaim licenses, downgrade or deactivate"
         ),
-        menu_summary="Audit Sigma licenses vs ADP terminations (reclaim paid seats)",
+        menu_summary="License audit, GTM team report, and seat reclamation",
         menu_hint="Dry-run default · --execute applies downgrades or deactivations",
         argv=(
             "python3",
@@ -379,6 +380,42 @@ TOOLS: tuple[Tool, ...] = (
         ),
         category="sigma",
         aliases=("sigma-audit", "sigma-offboard", "departed-licenses"),
+    ),
+    Tool(
+        name="sigma-gtm-team",
+        description=(
+            "GTM Team (Teri Hatfield): list all active direct and indirect "
+            "reports from ADP with their Sigma license tier. After the list, "
+            "ask whether people with no Sigma account should be created as View, "
+            "then whether View members should be upgraded to Act+."
+        ),
+        menu_summary="GTM Team (Teri Hatfield)",
+        menu_hint="License table · Y adds missing View users, then can upgrade View to Act+",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_license_audit.py"),
+            "--gtm-team",
+        ),
+        category="sigma",
+        aliases=("gtm-team", "teri-hatfield-team"),
+    ),
+    Tool(
+        name="sigma-value-engineering",
+        description=(
+            "Value Engineering (Katie Barends): list all active direct and "
+            "indirect reports from ADP with their Sigma license tier. After "
+            "the list, ask whether people with no Sigma account should be "
+            "created as View, then whether View members should be upgraded to Act+."
+        ),
+        menu_summary="Value Engineering (Katie Barends)",
+        menu_hint="License table · Y adds missing View users, then can upgrade View to Act+",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_license_audit.py"),
+            "--value-engineering",
+        ),
+        category="sigma",
+        aliases=("value-engineering", "ve-team", "katie-barends-team"),
     ),
     Tool(
         name="sigma-licenses",
