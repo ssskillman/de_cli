@@ -914,7 +914,7 @@ def ascii_table(headers: list[str], rows: list[list[str]], numeric_columns: set[
     return "\n".join(lines)
 
 
-def render_team_employee_list(rows: list[TeamLicenseRecord]) -> str:
+def render_team_employee_list(rows: list[TeamLicenseRecord], *, title: str = "Employees") -> str:
     people = ascii_table(
         ["#", "Relationship", "Depth", "Employee", "Job title", "Email", "License", "Account type", "Status"],
         [
@@ -933,7 +933,7 @@ def render_team_employee_list(rows: list[TeamLicenseRecord]) -> str:
         ],
         numeric_columns={0, 2},
     )
-    return "\n".join(["Employees", people])
+    return "\n".join([title, people])
 
 
 def render_team_license_report(
@@ -1073,8 +1073,9 @@ def offer_missing_view_accounts(
     manager_email: str,
     input_fn=input,
     isatty: bool | None = None,
+    ask_to_show: bool = True,
 ) -> str | None:
-    """Ask whether people with no Sigma account should be created as View."""
+    """Show people with no Sigma license, then ask to create them as View."""
     missing = [
         row
         for row in build_team_license_rows(workers, records)
@@ -1085,9 +1086,19 @@ def offer_missing_view_accounts(
     interactive = sys.stdin.isatty() if isatty is None else isatty
     if not interactive:
         return None
+    if ask_to_show:
+        show = input_fn(
+            f"\nShow the {len(missing)} people with no Sigma license? [y/N] "
+        ).strip().lower()
+        if show in {"y", "yes"}:
+            print(
+                "\n"
+                + render_team_employee_list(
+                    missing, title="People with no Sigma license"
+                )
+            )
     answer = input_fn(
-        f"\nAdd the {len(missing)} people with no Sigma account with "
-        "View license / View account type? [y/N] "
+        f"\nUpgrade these {len(missing)} people to View? [y/N] "
     ).strip().lower()
     if answer not in {"y", "yes"}:
         return None
@@ -1330,6 +1341,10 @@ def offer_pick_view_members(
     return refreshed
 
 
+def team_breadcrumb(trail: tuple[str, ...]) -> str:
+    return " > ".join(trail)
+
+
 def browse_subteams(
     *,
     workers: list[ReportingWorker],
@@ -1343,22 +1358,25 @@ def browse_subteams(
     pick_multi=None,
     isatty: bool | None = None,
     confirm_browse: bool = True,
+    trail: tuple[str, ...] | None = None,
 ) -> list[MemberAuditRecord]:
     """Show each direct sub team, including everyone below that lead, then upgrade."""
     leads = direct_subteam_leads(workers, manager_email)
     interactive = sys.stdin.isatty() if isatty is None else isatty
     if not leads or not interactive:
         return records
+    here = trail or (manager_label,)
+    crumb = team_breadcrumb(here)
     if confirm_browse:
         answer = input_fn(
-            f"\nBrowse {len(leads)} sub teams under {manager_label}? [y/N] "
+            f"\nBrowse {len(leads)} sub teams under {crumb}? [y/N] "
         ).strip().lower()
         if answer not in {"y", "yes"}:
             return records
 
     choose = pick_choice or fzf_pick_choice
     picker = pick_multi or fzf_pick_multi
-    print("\n" + render_subteam_summary(workers, records, manager_email))
+    print("\n" + crumb + "\n" + render_subteam_summary(workers, records, manager_email))
     while True:
         entries = []
         for lead in direct_subteam_leads(workers, manager_email):
@@ -1374,7 +1392,7 @@ def browse_subteams(
         choice = choose(
             entries,
             prompt="sub team > ",
-            header=f"Sub teams under {manager_label} · counts include everyone below the lead",
+            header=f"{crumb} · counts include everyone below the lead",
         )
         if not choice or choice == "q":
             return records
@@ -1390,6 +1408,7 @@ def browse_subteams(
             client=client,
             type_to_tier=type_to_tier,
             lead=lead,
+            trail=here + (lead.full_name,),
             input_fn=input_fn,
             pick_choice=choose,
             pick_multi=picker,
@@ -1404,13 +1423,14 @@ def _present_subteam(
     client: SigmaClient,
     type_to_tier: dict[str, str] | None,
     lead: ReportingWorker,
+    trail: tuple[str, ...],
     input_fn,
     pick_choice,
     pick_multi,
     isatty: bool,
 ) -> list[MemberAuditRecord]:
     subtree = rebase_subtree(workers, lead.email)
-    label = f"Sub team: {lead.full_name}"
+    label = team_breadcrumb(trail)
     rows = build_team_license_rows(subtree, records)
     print(
         "\n"
@@ -1429,6 +1449,7 @@ def _present_subteam(
         ("upgrade", "Upgrade all View members to Act+"),
         ("people", "Upgrade individuals from View to Act+"),
         ("list", "Show the detailed user list"),
+        ("unlicensed", "Show people with no Sigma license"),
     ]
     if child_leads:
         actions.append(("cascade", "Cascade to the next level"))
@@ -1436,11 +1457,33 @@ def _present_subteam(
     action = pick_choice(
         actions,
         prompt="sub team action > ",
-        header=f"{lead.full_name} · breakdown above · upgrade all viewers or cascade down",
+        header=f"{label} · upgrade all viewers or cascade down",
     )
     if action == "list":
         print("\n" + render_team_employee_list(rows))
         return records
+    if action == "unlicensed":
+        missing = [row for row in rows if row.license_type == "No Sigma account"]
+        if not missing:
+            print("Everyone in this sub team has a Sigma license.")
+            return records
+        print("\n" + render_team_employee_list(missing, title="People with no Sigma license"))
+        updated = offer_missing_view_accounts(
+            workers=subtree,
+            records=records,
+            client=client,
+            type_to_tier=type_to_tier,
+            label=label,
+            manager_email=lead.email,
+            input_fn=input_fn,
+            isatty=isatty,
+            ask_to_show=False,
+        )
+        if not updated:
+            return records
+        print("\n" + updated)
+        tiers = account_type_tiers(client, type_to_tier)
+        return build_audit_records(client.load_members(), [], tiers, activities={})
     if action == "people":
         targets = view_member_targets(rows, records)
         if not targets:
@@ -1451,7 +1494,7 @@ def _present_subteam(
             for email in pick_multi(
                 [(target.email, f"{target.full_name}  <{target.email}>") for target in targets],
                 prompt="view member > ",
-                header=f"{lead.full_name} · Tab toggles · Enter upgrades selected View members to Act+",
+                header=f"{label} · Tab toggles · Enter upgrades selected View members to Act+",
             )
         }
         chosen = [target for target in targets if target.email.casefold() in selected]
@@ -1504,6 +1547,7 @@ def _present_subteam(
                     pick_multi=pick_multi,
                     isatty=isatty,
                     confirm_browse=False,
+                    trail=trail,
                 )
         return refreshed
     if action in {"cascade", "below"}:
@@ -1519,6 +1563,7 @@ def _present_subteam(
             pick_multi=pick_multi,
             isatty=isatty,
             confirm_browse=False,
+            trail=trail,
         )
     return records
 
@@ -2365,6 +2410,39 @@ def interactive_build_report(records: list[MemberAuditRecord]) -> None:
         print(f"Exported {len(filtered)} records to {csv_path}")
 
 
+def audit_menu_entries(*, departed_active_paid: int, departed_active_free: int) -> list[tuple[str, str]]:
+    """Departed paid/free seats first, then the other audit actions A–Z, then Quit."""
+    featured = [
+        (
+            "critical-paid",
+            f"[CRITICAL] Active + Paid: {departed_active_paid} — seats to reclaim (wasting licenses)",
+        ),
+        (
+            "high-free",
+            f"[HIGH] Active + Free: {departed_active_free} — active View accounts to deactivate",
+        ),
+    ]
+    actions = [
+        ("batch-deactivate", "Batch deactivate active departed users (dry-run preview)"),
+        ("build-report", "Build a report (custom multi-select: Account, License, & Employee type)"),
+        ("search", "Custom search user"),
+        ("deactivate-one", "Deactivate one-by-one (interactive step-through or pick user)"),
+        ("downgrade-departed", "Downgrade active departed paid users to View (dry-run preview)"),
+        ("downgrade-dormant", "Downgrade dormant paid users to View (dry-run preview or full prod send it)"),
+        ("export-csv", "Export audit to CSV /tmp/sigma_departed_audit.csv"),
+        ("gtm-team", "GTM Team (Teri Hatfield) — direct/indirect license breakdown"),
+        ("list-departed", "List all departed employees in Sigma"),
+        ("list-paid", "List departed employees with active PAID licenses (CRITICAL)"),
+        ("list-dormant", "List dormant paid seats (0 activity in 30 days)"),
+        ("list-view-only-builders", "List view-only Builders (holding Build tier but 0 edits)"),
+        ("utilization", "Paid license utilization & activity (all active paid seats)"),
+        ("value-engineering", "Value Engineering (Katie Barends) — direct/indirect license breakdown"),
+    ]
+    actions.sort(key=lambda item: item[1].casefold())
+    numbered = [(key, f"{index}. {label}") for index, (key, label) in enumerate(actions, start=1)]
+    return [*featured, *numbered, ("q", "q. Quit")]
+
+
 def interactive_menu(
     records: list[MemberAuditRecord],
     client: SigmaClient,
@@ -2373,55 +2451,46 @@ def interactive_menu(
     while True:
         departed = [r for r in records if r.is_departed]
         departed_active_paid = [r for r in departed if r.sigma_status == "active" and r.is_paid]
+        departed_active_free = [r for r in departed if r.sigma_status == "active" and not r.is_paid]
         paid_active = [r for r in records if r.sigma_status == "active" and r.is_paid]
         dormant_paid = [r for r in paid_active if r.utilization_status == "DORMANT"]
         underutilized_build = [r for r in paid_active if r.utilization_status == "UNDERUTILIZED_BUILD"]
 
         print("\n" + AuditReporter.render_summary(records))
 
-        menu_entries = [
-            ("1", "1. List departed employees with active PAID licenses (CRITICAL)"),
-            ("2", "2. Paid license utilization & activity (all active paid seats)"),
-            ("3", "3. List dormant paid seats (0 activity in 30 days)"),
-            ("4", "4. List view-only Builders (holding Build tier but 0 edits)"),
-            ("5", "5. List all departed employees in Sigma"),
-            ("6", "6. Downgrade active departed paid users to View (dry-run preview)"),
-            ("7", "7. Downgrade dormant paid users to View (dry-run preview or full prod send it)"),
-            ("8", "8. Batch deactivate active departed users (dry-run preview)"),
-            ("9", "9. Deactivate one-by-one (interactive step-through or pick user)"),
-            ("10", "10. Custom search user"),
-            ("11", "11. Export audit to CSV /tmp/sigma_departed_audit.csv"),
-            ("12", "12. Build a report (custom multi-select: Account, License, & Employee type)"),
-            ("13", "13. GTM Team (Teri Hatfield) — direct/indirect license breakdown"),
-            ("14", "14. Value Engineering (Katie Barends) — direct/indirect license breakdown"),
-            ("q", "q. Quit"),
-        ]
+        menu_entries = audit_menu_entries(
+            departed_active_paid=len(departed_active_paid),
+            departed_active_free=len(departed_active_free),
+        )
 
         choice = fzf_pick_choice(
             menu_entries,
             prompt="option > ",
-            header="Choose an option · ↑/↓ navigate · type to filter · Enter select · Esc quit",
+            header="Top two are departed seats · then actions A–Z · type to filter · Enter select · Esc quit",
             height="55%",
         )
 
         if not choice or choice in ("q", "quit", "exit"):
             return 0
-        elif choice == "1":
+        elif choice in {"critical-paid", "list-paid"}:
             print(AuditReporter.render_table(departed_active_paid))
             input("\nPress Enter to return to menu...")
-        elif choice == "2":
+        elif choice == "high-free":
+            print(AuditReporter.render_table(departed_active_free))
+            input("\nPress Enter to return to menu...")
+        elif choice == "utilization":
             print(AuditReporter.render_table(paid_active, utilization_mode=True))
             input("\nPress Enter to return to menu...")
-        elif choice == "3":
+        elif choice == "list-dormant":
             print(AuditReporter.render_table(dormant_paid, utilization_mode=True))
             input("\nPress Enter to return to menu...")
-        elif choice == "4":
+        elif choice == "list-view-only-builders":
             print(AuditReporter.render_table(underutilized_build, utilization_mode=True))
             input("\nPress Enter to return to menu...")
-        elif choice == "5":
+        elif choice == "list-departed":
             print(AuditReporter.render_table(departed))
             input("\nPress Enter to return to menu...")
-        elif choice == "6":
+        elif choice == "downgrade-departed":
             run_remediation_plan(
                 client=client,
                 targets=departed_active_paid,
@@ -2433,7 +2502,7 @@ def interactive_menu(
                 auto_confirm=False,
             )
             input("\nPress Enter to return to menu...")
-        elif choice == "7":
+        elif choice == "downgrade-dormant":
             if not dormant_paid:
                 print("\nNo dormant paid users found to downgrade.")
                 input("\nPress Enter to return to menu...")
@@ -2463,7 +2532,7 @@ def interactive_menu(
                 auto_confirm=False,
             )
             input("\nPress Enter to return to menu...")
-        elif choice == "8":
+        elif choice == "batch-deactivate":
             owner = input("Enter destination email for reassigned documents (or 'archive'): ").strip()
             if owner:
                 archive_docs = owner.lower() == "archive"
@@ -2478,21 +2547,21 @@ def interactive_menu(
                     auto_confirm=False,
                 )
                 input("\nPress Enter to return to menu...")
-        elif choice == "9":
+        elif choice == "deactivate-one":
             interactive_deactivate_one_by_one(records, client)
-        elif choice == "10":
+        elif choice == "search":
             term = input("Search query: ").strip().lower()
             matches = [r for r in records if term in r.email.lower() or term in r.full_name.lower()]
             print(AuditReporter.render_table(matches))
             input("\nPress Enter to return to menu...")
-        elif choice == "11":
+        elif choice == "export-csv":
             csv_path = Path("/tmp/sigma_departed_audit.csv")
             csv_path.write_text(AuditReporter.render_csv(records), encoding="utf-8")
             print(f"Exported {len(records)} records to {csv_path}")
             input("\nPress Enter to return to menu...")
-        elif choice == "12":
+        elif choice == "build-report":
             interactive_build_report(records)
-        elif choice == "13":
+        elif choice == "gtm-team":
             try:
                 run_reporting_team_prompt(
                     records, client, GTM_TEAM_LABEL, GTM_MANAGER_EMAIL, type_to_tier
@@ -2500,7 +2569,7 @@ def interactive_menu(
             except Exception as exc:
                 print(f"ERROR building GTM Team report: {exc}", file=sys.stderr)
             input("\nPress Enter to return to menu...")
-        elif choice == "14":
+        elif choice == "value-engineering":
             try:
                 run_reporting_team_prompt(
                     records, client, VE_TEAM_LABEL, VE_MANAGER_EMAIL, type_to_tier

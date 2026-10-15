@@ -1,7 +1,9 @@
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "sigma_license_audit.py"
@@ -245,7 +247,8 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             input_fn=answer,
             isatty=True,
         )
-        self.assertIn("View license", prompts[0])
+        self.assertIn("no Sigma license", prompts[0])
+        self.assertIn("View", prompts[1])
         self.assertEqual(client.created[0]["email"], "no.sigma@iterable.com")
         self.assertEqual(client.created[0]["firstName"], "Katie Leigh")
         self.assertEqual(client.created[0]["lastName"], "Barends")
@@ -257,6 +260,60 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             if line.startswith("| ") and line.split("|")[1].strip() in {"Direct", "Indirect", "Total"}
         }
         self.assertEqual(table_rows["Total"], ["2", "1", "0", "0", "1", "0"])
+
+    def test_unlicensed_list_can_be_shown_without_creating_view_accounts(self):
+        workers = [
+            ReportingWorker("ada@iterable.com", "Lovelace, Ada", 1, "teri.hatfield@iterable.com", "VP"),
+            ReportingWorker("no.sigma@iterable.com", "Missing Person", 2, "ada@iterable.com", "Analyst"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="ada@iterable.com",
+                member_id="m-1",
+                first_name="Ada",
+                last_name="Lovelace",
+                member_type="Admin",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            )
+        ]
+        missing = [
+            row
+            for row in build_team_license_rows(workers, records)
+            if row.license_type == "No Sigma account"
+        ]
+        listing = MODULE.render_team_employee_list(missing, title="People with no Sigma license")
+        self.assertIn("People with no Sigma license", listing)
+        self.assertIn("Analyst", listing)
+        self.assertIn("no.sigma@iterable.com", listing)
+        self.assertNotIn("ada@iterable.com", listing)
+
+        class CreatingClient:
+            def __init__(self):
+                self.created = []
+
+            def create_member(self, *args, **kwargs):
+                self.created.append((args, kwargs))
+
+        prompts = []
+        answers = iter(["y", "n"])
+        declined = MODULE.offer_missing_view_accounts(
+            workers=workers,
+            records=records,
+            client=CreatingClient(),
+            type_to_tier={"View": "View"},
+            label="GTM Team (Teri Hatfield)",
+            manager_email="teri.hatfield@iterable.com",
+            input_fn=lambda prompt: prompts.append(prompt) or next(answers),
+            isatty=True,
+        )
+        self.assertIsNone(declined)
+        self.assertIn("no Sigma license", prompts[0])
+        self.assertIn("View", prompts[1])
 
     def test_no_and_non_tty_do_not_create_view_accounts(self):
         workers = [
@@ -621,6 +678,67 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             isatty=True,
         )
         self.assertEqual(client.updates, [("m-leaf", "Act+")])
+
+    def test_audit_menu_offers_departed_seats_then_alphabetical_actions(self):
+        entries = MODULE.audit_menu_entries(departed_active_paid=2, departed_active_free=98)
+        self.assertEqual(entries[0][0], "critical-paid")
+        self.assertIn("[CRITICAL] Active + Paid: 2", entries[0][1])
+        self.assertEqual(entries[1][0], "high-free")
+        self.assertIn("[HIGH] Active + Free: 98", entries[1][1])
+        self.assertEqual(entries[-1], ("q", "q. Quit"))
+        labels = [label.split(". ", 1)[1] for _key, label in entries[2:-1]]
+        self.assertEqual(labels, sorted(labels, key=str.casefold))
+        self.assertTrue(labels[0].startswith("Batch deactivate"))
+        self.assertTrue(labels[-1].startswith("Value Engineering"))
+
+    def test_subteam_screens_show_the_path_from_the_root_team(self):
+        workers, _records = self._subteam_fixture()
+        headers = []
+        choices = iter([
+            "katie.barends@iterable.com",
+            "cascade",
+            "ada@iterable.com",
+            "back",
+            "q",
+            "q",
+        ])
+
+        def pick_choice(_entries, **kwargs):
+            headers.append(kwargs["header"])
+            return next(choices)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            MODULE.browse_subteams(
+                workers=workers,
+                records=[],
+                client=object(),
+                type_to_tier=None,
+                manager_email="teri.hatfield@iterable.com",
+                manager_label="GTM Team (Teri Hatfield)",
+                input_fn=lambda _prompt: "y",
+                pick_choice=pick_choice,
+                pick_multi=lambda _entries, **_kwargs: [],
+                isatty=True,
+            )
+
+        text = output.getvalue()
+        root = "GTM Team (Teri Hatfield)"
+        katie = f"{root} > Barends, Katie Leigh"
+        ada = f"{katie} > Lovelace, Ada"
+        self.assertIn(katie, text)
+        self.assertIn(ada, text)
+        self.assertEqual(
+            headers,
+            [
+                f"{root} · counts include everyone below the lead",
+                f"{katie} · upgrade all viewers or cascade down",
+                f"{katie} · counts include everyone below the lead",
+                f"{ada} · upgrade all viewers or cascade down",
+                f"{katie} · counts include everyone below the lead",
+                f"{root} · counts include everyone below the lead",
+            ],
+        )
 
     def test_derive_tier_from_permissions(self):
         self.assertEqual(derive_tier_from_permissions(["edit-workbook"]), "Build")
