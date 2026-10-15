@@ -893,28 +893,7 @@ def ascii_table(headers: list[str], rows: list[list[str]], numeric_columns: set[
     return "\n".join(lines)
 
 
-def render_team_license_report(
-    label: str,
-    rows: list[TeamLicenseRecord],
-    *,
-    manager_email: str,
-) -> str:
-    tiers = ("Build", "Analyze", "Act", "View", "No Sigma account")
-
-    def counts(selected: list[TeamLicenseRecord]) -> list[str]:
-        return [str(sum(row.license_type == tier for row in selected)) for tier in tiers]
-
-    direct = [row for row in rows if row.relationship == "Direct"]
-    indirect = [row for row in rows if row.relationship == "Indirect"]
-    summary = ascii_table(
-        ["Group", "People", *tiers],
-        [
-            ["Direct", str(len(direct)), *counts(direct)],
-            ["Indirect", str(len(indirect)), *counts(indirect)],
-            ["Total", str(len(rows)), *counts(rows)],
-        ],
-        numeric_columns={1, 2, 3, 4, 5, 6},
-    )
+def render_team_employee_list(rows: list[TeamLicenseRecord]) -> str:
     people = ascii_table(
         ["#", "Relationship", "Depth", "Employee", "Email", "License", "Account type", "Status"],
         [
@@ -932,18 +911,60 @@ def render_team_license_report(
         ],
         numeric_columns={0, 2},
     )
-    return "\n".join(
+    return "\n".join(["Employees", people])
+
+
+def render_team_license_report(
+    label: str,
+    rows: list[TeamLicenseRecord],
+    *,
+    manager_email: str,
+    include_employees: bool = True,
+) -> str:
+    tiers = ("Build", "Analyze", "Act", "View", "No Sigma account")
+
+    def counts(selected: list[TeamLicenseRecord]) -> list[str]:
+        return [str(sum(row.license_type == tier for row in selected)) for tier in tiers]
+
+    direct = [row for row in rows if row.relationship == "Direct"]
+    indirect = [row for row in rows if row.relationship == "Indirect"]
+    summary = ascii_table(
+        ["Group", "People", *tiers],
         [
-            label,
-            f"Manager: {manager_email}",
-            "",
-            "License breakdown",
-            summary,
-            "",
-            "Employees",
-            people,
-        ]
+            ["Direct", str(len(direct)), *counts(direct)],
+            ["Indirect", str(len(indirect)), *counts(indirect)],
+            ["Total", str(len(rows)), *counts(rows)],
+        ],
+        numeric_columns={1, 2, 3, 4, 5, 6},
     )
+    parts = [
+        label,
+        f"Manager: {manager_email}",
+        "",
+        "License breakdown",
+        summary,
+    ]
+    if include_employees:
+        parts.extend(["", render_team_employee_list(rows)])
+    return "\n".join(parts)
+
+
+def offer_show_employee_list(
+    rows: list[TeamLicenseRecord],
+    *,
+    input_fn=input,
+    isatty: bool | None = None,
+) -> str | None:
+    """Ask before printing the employee table. Non-interactive runs skip the list."""
+    if not rows:
+        return None
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not interactive:
+        return None
+    answer = input_fn("\nShow the detailed user list? [y/N] ").strip().lower()
+    if answer not in {"y", "yes"}:
+        return None
+    return render_team_employee_list(rows)
 
 
 def render_reporting_team(
@@ -1066,6 +1087,7 @@ def offer_missing_view_accounts(
         label,
         build_team_license_rows(workers, refreshed),
         manager_email=manager_email,
+        include_employees=False,
     )
     lines = [f"Created {created} View account(s)."]
     if failures:
@@ -1122,6 +1144,7 @@ def offer_upgrade_view_to_act_plus(
         label,
         build_team_license_rows(workers, refreshed),
         manager_email=manager_email,
+        include_employees=False,
     )
     lines = [f"Upgraded {upgraded} account(s) from View to {member_type}."]
     if failures:
@@ -1139,13 +1162,18 @@ def run_reporting_team_prompt(
     type_to_tier: dict[str, str] | None = None,
 ) -> None:
     workers = SnowflakeWorkerStore.fetch_reporting_tree(manager_email)
+    rows = build_team_license_rows(workers, records)
     print(
         render_team_license_report(
             label,
-            build_team_license_rows(workers, records),
+            rows,
             manager_email=manager_email,
+            include_employees=False,
         )
     )
+    listed = offer_show_employee_list(rows)
+    if listed:
+        print("\n" + listed)
     updated = offer_missing_view_accounts(
         workers=workers,
         records=records,
@@ -1162,6 +1190,9 @@ def run_reporting_team_prompt(
         current_records = build_audit_records(
             client.load_members(), [], current_tiers, activities={}
         )
+        listed = offer_show_employee_list(build_team_license_rows(workers, current_records))
+        if listed:
+            print("\n" + listed)
     upgraded = offer_upgrade_view_to_act_plus(
         workers=workers,
         records=current_records,
@@ -1172,6 +1203,13 @@ def run_reporting_team_prompt(
     )
     if upgraded:
         print("\n" + upgraded)
+        final_tiers = account_type_tiers(client, current_tiers)
+        final_records = build_audit_records(
+            client.load_members(), [], final_tiers, activities={}
+        )
+        listed = offer_show_employee_list(build_team_license_rows(workers, final_records))
+        if listed:
+            print("\n" + listed)
 
 
 def format_ts_date(ts: str) -> str:

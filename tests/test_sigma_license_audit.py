@@ -117,6 +117,38 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIn("| Relationship |", report)
         self.assertIn("indirect.no.sigma@iterable.com", report)
 
+    def test_detailed_user_list_is_shown_only_after_yes(self):
+        rows = build_team_license_rows(
+            [ReportingWorker("ada@iterable.com", "Lovelace, Ada", 1, "teri.hatfield@iterable.com")],
+            [],
+        )
+        prompts = []
+        declined = MODULE.offer_show_employee_list(
+            rows,
+            input_fn=lambda prompt: prompts.append(prompt) or "n",
+            isatty=True,
+        )
+        self.assertIsNone(declined)
+        self.assertIn("detailed user list", prompts[0].lower())
+
+        shown = MODULE.offer_show_employee_list(
+            rows,
+            input_fn=lambda _prompt: "y",
+            isatty=True,
+        )
+        self.assertIn("ada@iterable.com", shown)
+        self.assertIn("Employees", shown)
+
+        def explode(_prompt):
+            raise AssertionError("prompted without a tty")
+
+        skipped = MODULE.offer_show_employee_list(
+            rows,
+            input_fn=explode,
+            isatty=False,
+        )
+        self.assertIsNone(skipped)
+
     def test_value_engineering_reports_to_katie_barends(self):
         self.assertEqual(MODULE.VE_MANAGER_EMAIL, "katie.barends@iterable.com")
         self.assertEqual(MODULE.VE_TEAM_LABEL, "Value Engineering (Katie Barends)")
