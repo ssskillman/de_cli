@@ -56,6 +56,10 @@ DEFAULT_CACHE_DIR = Path.home() / ".cache" / "de"
 DEFAULT_CACHE_FILE = DEFAULT_CACHE_DIR / "adp_departed_workers.json"
 DEFAULT_ACTIVITY_CACHE_FILE = DEFAULT_CACHE_DIR / "sigma_user_activity.json"
 DEFAULT_DBT_PROFILES = Path.home() / ".dbt" / "profiles.yml"
+GTM_MANAGER_EMAIL = "teri.hatfield@iterable.com"
+GTM_TEAM_LABEL = "GTM Team (Teri Hatfield)"
+VE_MANAGER_EMAIL = "katie.barends@iterable.com"
+VE_TEAM_LABEL = "Value Engineering (Katie Barends)"
 
 TIERS = ["View", "Act", "Analyze", "Build"]
 PAID_TIERS = {"Build", "Analyze", "Act"}
@@ -105,6 +109,26 @@ class UserActivity:
     last_opened: str = ""
     last_edit: str = ""
     total_events: int = 0
+
+
+@dataclass(frozen=True)
+class ReportingWorker:
+    email: str
+    full_name: str
+    depth: int
+    manager_email: str
+
+
+@dataclass(frozen=True)
+class TeamLicenseRecord:
+    email: str
+    full_name: str
+    depth: int
+    manager_email: str
+    relationship: str
+    license_type: str
+    member_type: str
+    sigma_status: str
 
 
 @dataclass
@@ -307,6 +331,28 @@ class SigmaClient:
     def update_member_type(self, member_id: str, member_type: str = "View") -> Any:
         return self.request("PATCH", f"/v2/members/{member_id}", body={"memberType": member_type})
 
+    def create_member(
+        self,
+        email: str,
+        first_name: str,
+        last_name: str,
+        member_type: str = "View",
+    ) -> Any:
+        # POST /v2/members; sendInvite is a query param and defaults to emailing the user.
+        # https://help.sigmacomputing.com/reference/create-member
+        return self.request(
+            "POST",
+            "/v2/members",
+            params={"sendInvite": "true"},
+            body={
+                "email": email,
+                "firstName": first_name,
+                "lastName": last_name,
+                "memberType": member_type,
+                "userKind": "internal",
+            },
+        )
+
     def deactivate_member(
         self,
         member_id: str,
@@ -374,6 +420,91 @@ SELECT
 FROM combined
 GROUP BY email
 ORDER BY 3 DESC NULLS LAST;
+""".strip()
+
+    SQL_REPORTING_TREE = """
+WITH RECURSIVE
+emails AS (
+    SELECT
+        WORKER_ID,
+        LOWER(TRIM(EMAIL_URI)) AS email,
+        ROW_NUMBER() OVER (
+            PARTITION BY WORKER_ID
+            ORDER BY COALESCE(NAME_EFFECTIVE_DATE, '1900-01-01') DESC, _FIVETRAN_SYNCED DESC
+        ) AS rn
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.BUSINESS_COMMUNICATION
+    WHERE TYPE = 'email' AND EMAIL_URI IS NOT NULL
+),
+names AS (
+    SELECT
+        WORKER_ID,
+        COALESCE(NULLIF(PREFERRED_NAME_FORMATTED_NAME, ''), LEGAL_NAME_FORMATTED_NAME) AS full_name,
+        ROW_NUMBER() OVER (
+            PARTITION BY WORKER_ID
+            ORDER BY
+                COALESCE(
+                    PREFERRED_NAME_NAME_EFFECTIVE_DATE,
+                    LEGAL_NAME_NAME_EFFECTIVE_DATE,
+                    '1900-01-01'
+                ) DESC,
+                _FIVETRAN_SYNCED DESC
+        ) AS rn
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.PERSON_HISTORY
+),
+active_workers AS (
+    SELECT
+        w.ID AS worker_id,
+        e.email,
+        n.full_name
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORKER w
+    JOIN emails e ON e.WORKER_ID = w.ID AND e.rn = 1
+    LEFT JOIN names n ON n.WORKER_ID = w.ID AND n.rn = 1
+    WHERE (w.TERMINATION_DATE IS NULL OR w.TERMINATION_DATE > CURRENT_DATE())
+      AND COALESCE(w._FIVETRAN_DELETED, FALSE) = FALSE
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY e.email
+        ORDER BY w.STATUS_EFFECTIVE_DATE DESC NULLS LAST, w._FIVETRAN_SYNCED DESC
+    ) = 1
+),
+reporting AS (
+    SELECT WORKER_ID, REPORT_TO_WORKER_ID
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORKER_REPORT_TO
+    WHERE REPORT_TO_WORKER_ID IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY WORKER_ID
+        ORDER BY
+            REPORTS_TO_RELATIONSHIP_EFFECTIVE_DATE DESC NULLS LAST,
+            _FIVETRAN_SYNCED DESC
+    ) = 1
+),
+org (worker_id, email, full_name, manager_email, depth, worker_path) AS (
+    SELECT
+        w.worker_id,
+        w.email,
+        w.full_name,
+        '',
+        0,
+        ARRAY_CONSTRUCT(w.worker_id)
+    FROM active_workers w
+    WHERE w.email = %s
+
+    UNION ALL
+
+    SELECT
+        w.worker_id,
+        w.email,
+        w.full_name,
+        org.email,
+        org.depth + 1,
+        ARRAY_APPEND(org.worker_path, w.worker_id)
+    FROM org
+    JOIN reporting r ON r.REPORT_TO_WORKER_ID = org.worker_id
+    JOIN active_workers w ON w.worker_id = r.WORKER_ID
+    WHERE NOT ARRAY_CONTAINS(w.worker_id::VARIANT, org.worker_path)
+)
+SELECT email, COALESCE(full_name, email), depth, manager_email
+FROM org
+ORDER BY depth, full_name, email;
 """.strip()
 
     @staticmethod
@@ -449,6 +580,43 @@ ORDER BY 3 DESC NULLS LAST;
         ]
         cls.save_cache(workers)
         return workers
+
+    @classmethod
+    def fetch_reporting_tree(
+        cls,
+        manager_email: str,
+        profiles_path: Path = DEFAULT_DBT_PROFILES,
+    ) -> list[ReportingWorker]:
+        try:
+            import snowflake.connector
+        except ImportError as exc:
+            raise RuntimeError(
+                "snowflake-connector-python is not installed in the active Python environment. "
+                "Run via UDI environment: ~/UDI/.venv/bin/python scripts/sigma_license_audit.py"
+            ) from exc
+
+        params = cls._resolve_connection_params(profiles_path)
+        try:
+            conn = snowflake.connector.connect(**params)
+            cur = conn.cursor()
+            cur.execute(cls.SQL_REPORTING_TREE, (manager_email.strip().lower(),))
+            rows = cur.fetchall()
+            conn.close()
+        except Exception as exc:
+            raise RuntimeError(f"Snowflake ADP reporting hierarchy query failed: {exc}") from exc
+
+        if not rows or int(rows[0][2]) != 0:
+            raise RuntimeError(f"Active ADP manager not found: {manager_email}")
+        return [
+            ReportingWorker(
+                email=str(row[0]).strip().lower(),
+                full_name=str(row[1] or row[0]).strip(),
+                depth=int(row[2]),
+                manager_email=str(row[3] or "").strip().lower(),
+            )
+            for row in rows
+            if row[0] and int(row[2]) > 0
+        ]
 
     @staticmethod
     def _resolve_connection_params(profiles_path: Path) -> dict[str, Any]:
@@ -669,6 +837,253 @@ def build_audit_records(
         records.append(record)
 
     return records
+
+
+def build_team_license_rows(
+    workers: list[ReportingWorker],
+    sigma_records: list[MemberAuditRecord],
+) -> list[TeamLicenseRecord]:
+    sigma_by_email = {record.email.casefold(): record for record in sigma_records}
+    rows: list[TeamLicenseRecord] = []
+    for worker in workers:
+        sigma = sigma_by_email.get(worker.email.casefold())
+        rows.append(
+            TeamLicenseRecord(
+                email=worker.email,
+                full_name=worker.full_name,
+                depth=worker.depth,
+                manager_email=worker.manager_email,
+                relationship="Direct" if worker.depth == 1 else "Indirect",
+                license_type=sigma.license_type if sigma else "No Sigma account",
+                member_type=sigma.member_type if sigma else "—",
+                sigma_status=sigma.sigma_status if sigma else "—",
+            )
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            0 if row.relationship == "Direct" else 1,
+            row.depth,
+            row.full_name.casefold(),
+            row.email,
+        ),
+    )
+
+
+def ascii_table(headers: list[str], rows: list[list[str]], numeric_columns: set[int] | None = None) -> str:
+    numeric = numeric_columns or set()
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+    border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+
+    def format_row(cells: list[str]) -> str:
+        formatted = []
+        for index, cell in enumerate(cells):
+            if index in numeric and cell != headers[index]:
+                formatted.append(cell.rjust(widths[index]))
+            else:
+                formatted.append(cell.ljust(widths[index]))
+        return "| " + " | ".join(formatted) + " |"
+
+    lines = [border, format_row(headers), border]
+    lines.extend(format_row(row) for row in rows)
+    lines.append(border)
+    return "\n".join(lines)
+
+
+def render_team_license_report(
+    label: str,
+    rows: list[TeamLicenseRecord],
+    *,
+    manager_email: str,
+) -> str:
+    tiers = ("Build", "Analyze", "Act", "View", "No Sigma account")
+
+    def counts(selected: list[TeamLicenseRecord]) -> list[str]:
+        return [str(sum(row.license_type == tier for row in selected)) for tier in tiers]
+
+    direct = [row for row in rows if row.relationship == "Direct"]
+    indirect = [row for row in rows if row.relationship == "Indirect"]
+    summary = ascii_table(
+        ["Group", "People", *tiers],
+        [
+            ["Direct", str(len(direct)), *counts(direct)],
+            ["Indirect", str(len(indirect)), *counts(indirect)],
+            ["Total", str(len(rows)), *counts(rows)],
+        ],
+        numeric_columns={1, 2, 3, 4, 5, 6},
+    )
+    people = ascii_table(
+        ["#", "Relationship", "Depth", "Employee", "Email", "License", "Account type", "Status"],
+        [
+            [
+                str(index),
+                row.relationship,
+                str(row.depth),
+                row.full_name,
+                row.email,
+                row.license_type,
+                row.member_type,
+                row.sigma_status,
+            ]
+            for index, row in enumerate(rows, 1)
+        ],
+        numeric_columns={0, 2},
+    )
+    return "\n".join(
+        [
+            label,
+            f"Manager: {manager_email}",
+            "",
+            "License breakdown",
+            summary,
+            "",
+            "Employees",
+            people,
+        ]
+    )
+
+
+def render_reporting_team(
+    records: list[MemberAuditRecord],
+    *,
+    label: str,
+    manager_email: str,
+) -> str:
+    workers = SnowflakeWorkerStore.fetch_reporting_tree(manager_email)
+    rows = build_team_license_rows(workers, records)
+    return render_team_license_report(label, rows, manager_email=manager_email)
+
+
+def render_gtm_team(records: list[MemberAuditRecord]) -> str:
+    return render_reporting_team(
+        records,
+        label=GTM_TEAM_LABEL,
+        manager_email=GTM_MANAGER_EMAIL,
+    )
+
+
+def render_value_engineering_team(records: list[MemberAuditRecord]) -> str:
+    return render_reporting_team(
+        records,
+        label=VE_TEAM_LABEL,
+        manager_email=VE_MANAGER_EMAIL,
+    )
+
+
+def split_person_name(full_name: str) -> tuple[str, str]:
+    """ADP formatted names are 'Last, First Middle'."""
+    name = " ".join(full_name.split())
+    if "," in name:
+        last, _, rest = name.partition(",")
+        first = rest.strip()
+        last = last.strip()
+        if first and last:
+            return first, last
+        token = first or last or "Unknown"
+        return token, token
+    parts = name.split()
+    if len(parts) >= 2:
+        return parts[0], " ".join(parts[1:])
+    if parts:
+        return parts[0], parts[0]
+    return "Unknown", "Unknown"
+
+
+def resolve_view_account_type(type_to_tier: dict[str, str]) -> str:
+    for name, tier in type_to_tier.items():
+        if str(tier) == "View" and str(name).casefold() == "view":
+            return str(name)
+    for name, tier in type_to_tier.items():
+        if str(tier) == "View" and str(name).strip():
+            return str(name)
+    return "View"
+
+
+def offer_missing_view_accounts(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    label: str,
+    manager_email: str,
+    input_fn=input,
+    isatty: bool | None = None,
+) -> str | None:
+    """Ask whether people with no Sigma account should be created as View."""
+    missing = [
+        row
+        for row in build_team_license_rows(workers, records)
+        if row.license_type == "No Sigma account"
+    ]
+    if not missing:
+        return None
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not interactive:
+        return None
+    answer = input_fn(
+        f"\nAdd the {len(missing)} people with no Sigma account with "
+        "View license / View account type? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return None
+
+    tiers = dict(type_to_tier or {})
+    if not tiers and hasattr(client, "load_account_types_map"):
+        tiers = client.load_account_types_map()
+    member_type = resolve_view_account_type(tiers)
+    created = 0
+    failures: list[str] = []
+    for row in missing:
+        first_name, last_name = split_person_name(row.full_name)
+        try:
+            client.create_member(row.email, first_name, last_name, member_type)
+            created += 1
+        except Exception as exc:
+            failures.append(f"{row.email}: {exc}")
+
+    refreshed = build_audit_records(client.load_members(), [], tiers, activities={})
+    report = render_team_license_report(
+        label,
+        build_team_license_rows(workers, refreshed),
+        manager_email=manager_email,
+    )
+    lines = [f"Created {created} View account(s)."]
+    if failures:
+        lines.append("Failed:")
+        lines.extend(f"  {item}" for item in failures)
+    lines.extend(["", "Updated license breakdown", report])
+    return "\n".join(lines)
+
+
+def run_reporting_team_prompt(
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    label: str,
+    manager_email: str,
+    type_to_tier: dict[str, str] | None = None,
+) -> None:
+    workers = SnowflakeWorkerStore.fetch_reporting_tree(manager_email)
+    print(
+        render_team_license_report(
+            label,
+            build_team_license_rows(workers, records),
+            manager_email=manager_email,
+        )
+    )
+    updated = offer_missing_view_accounts(
+        workers=workers,
+        records=records,
+        client=client,
+        type_to_tier=type_to_tier,
+        label=label,
+        manager_email=manager_email,
+    )
+    if updated:
+        print("\n" + updated)
 
 
 def format_ts_date(ts: str) -> str:
@@ -894,6 +1309,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--account-type", action="append", dest="account_types", help="Filter by Sigma account type (e.g. Act, build, admin, View). Repeatable.")
     parser.add_argument("--tier", "--license-type", action="append", dest="license_types", help="Filter by Sigma billed license tier (Build, Analyze, Act, View). Repeatable.")
     parser.add_argument("--employee-type", action="append", dest="employee_types", choices=["active", "departed", "guest", "embed", "all"], help="Filter by employee type (active, departed, guest, embed, all). Repeatable.")
+    parser.add_argument(
+        "--gtm-team",
+        action="store_true",
+        help="List GTM Team (Teri Hatfield), direct and indirect reports, with Sigma license breakdown.",
+    )
+    parser.add_argument(
+        "--value-engineering",
+        action="store_true",
+        help="List Value Engineering (Katie Barends), direct and indirect reports, with Sigma license breakdown.",
+    )
 
     # Remediation actions
     parser.add_argument("--downgrade-to-view", action="store_true", help="Downgrade targeted users to View account type.")
@@ -1427,7 +1852,11 @@ def interactive_build_report(records: list[MemberAuditRecord]) -> None:
         print(f"Exported {len(filtered)} records to {csv_path}")
 
 
-def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> int:
+def interactive_menu(
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None = None,
+) -> int:
     while True:
         departed = [r for r in records if r.is_departed]
         departed_active_paid = [r for r in departed if r.sigma_status == "active" and r.is_paid]
@@ -1450,6 +1879,8 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
             ("10", "10. Custom search user"),
             ("11", "11. Export audit to CSV /tmp/sigma_departed_audit.csv"),
             ("12", "12. Build a report (custom multi-select: Account, License, & Employee type)"),
+            ("13", "13. GTM Team (Teri Hatfield) — direct/indirect license breakdown"),
+            ("14", "14. Value Engineering (Katie Barends) — direct/indirect license breakdown"),
             ("q", "q. Quit"),
         ]
 
@@ -1548,6 +1979,22 @@ def interactive_menu(records: list[MemberAuditRecord], client: SigmaClient) -> i
             input("\nPress Enter to return to menu...")
         elif choice == "12":
             interactive_build_report(records)
+        elif choice == "13":
+            try:
+                run_reporting_team_prompt(
+                    records, client, GTM_TEAM_LABEL, GTM_MANAGER_EMAIL, type_to_tier
+                )
+            except Exception as exc:
+                print(f"ERROR building GTM Team report: {exc}", file=sys.stderr)
+            input("\nPress Enter to return to menu...")
+        elif choice == "14":
+            try:
+                run_reporting_team_prompt(
+                    records, client, VE_TEAM_LABEL, VE_MANAGER_EMAIL, type_to_tier
+                )
+            except Exception as exc:
+                print(f"ERROR building Value Engineering report: {exc}", file=sys.stderr)
+            input("\nPress Enter to return to menu...")
 
 
 def main() -> int:
@@ -1568,6 +2015,27 @@ def main() -> int:
         print(f"ERROR querying Sigma API: {exc}", file=sys.stderr)
         return 1
 
+    if args.gtm_team or args.value_engineering:
+        records = build_audit_records(
+            raw_members,
+            [],
+            type_to_tier,
+            activities=ActivityStore.load_cached(cache_file=args.activity_file),
+        )
+        try:
+            if args.gtm_team:
+                run_reporting_team_prompt(
+                    records, sigma_client, GTM_TEAM_LABEL, GTM_MANAGER_EMAIL, type_to_tier
+                )
+            if args.value_engineering:
+                run_reporting_team_prompt(
+                    records, sigma_client, VE_TEAM_LABEL, VE_MANAGER_EMAIL, type_to_tier
+                )
+        except Exception as exc:
+            print(f"ERROR building team report: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
     # Fetch departed employees from Snowflake ADP
     try:
         departed_workers = SnowflakeWorkerStore.fetch_from_snowflake(force_refresh=args.refresh)
@@ -1583,7 +2051,7 @@ def main() -> int:
 
     # Interactive mode check
     if args.interactive or (len(sys.argv) == 1 and sys.stdin.isatty()):
-        return interactive_menu(records, sigma_client)
+        return interactive_menu(records, sigma_client, type_to_tier)
 
     # Filtering
     filtered = records

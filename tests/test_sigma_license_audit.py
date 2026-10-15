@@ -24,6 +24,9 @@ run_remediation_plan = MODULE.run_remediation_plan
 BrailleSpinner = MODULE.BrailleSpinner
 fzf_pick_choice = MODULE.fzf_pick_choice
 fzf_pick_multi = MODULE.fzf_pick_multi
+ReportingWorker = MODULE.ReportingWorker
+build_team_license_rows = MODULE.build_team_license_rows
+render_team_license_report = MODULE.render_team_license_report
 
 
 class FakeSigmaClient:
@@ -45,6 +48,209 @@ class FakeSigmaClient:
 
 
 class SigmaLicenseAuditTests(unittest.TestCase):
+    def test_gtm_team_separates_direct_and_indirect_license_breakdown(self):
+        workers = [
+            ReportingWorker(
+                email="direct.builder@iterable.com",
+                full_name="Direct Builder",
+                depth=1,
+                manager_email="teri.hatfield@iterable.com",
+            ),
+            ReportingWorker(
+                email="indirect.viewer@iterable.com",
+                full_name="Indirect Viewer",
+                depth=2,
+                manager_email="direct.builder@iterable.com",
+            ),
+            ReportingWorker(
+                email="indirect.no.sigma@iterable.com",
+                full_name="Indirect No Sigma",
+                depth=3,
+                manager_email="indirect.viewer@iterable.com",
+            ),
+        ]
+        sigma_records = [
+            MemberAuditRecord(
+                email="direct.builder@iterable.com",
+                member_id="m-1",
+                first_name="Direct",
+                last_name="Builder",
+                member_type="Admin",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+            MemberAuditRecord(
+                email="indirect.viewer@iterable.com",
+                member_id="m-2",
+                first_name="Indirect",
+                last_name="Viewer",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+        ]
+
+        rows = build_team_license_rows(workers, sigma_records)
+        self.assertEqual([row.relationship for row in rows], ["Direct", "Indirect", "Indirect"])
+        self.assertEqual(rows[-1].license_type, "No Sigma account")
+
+        report = render_team_license_report(
+            "GTM Team (Teri Hatfield)", rows, manager_email="teri.hatfield@iterable.com"
+        )
+        self.assertIn("GTM Team (Teri Hatfield)", report)
+        table_rows = {
+            line.split("|")[1].strip(): [cell.strip() for cell in line.split("|")[2:-1]]
+            for line in report.splitlines()
+            if line.startswith("| ") and line.split("|")[1].strip() in {"Direct", "Indirect", "Total"}
+        }
+        self.assertEqual(table_rows["Direct"], ["1", "1", "0", "0", "0", "0"])
+        self.assertEqual(table_rows["Indirect"], ["2", "0", "0", "0", "1", "1"])
+        self.assertEqual(table_rows["Total"], ["3", "1", "0", "0", "1", "1"])
+        self.assertIn("| Relationship |", report)
+        self.assertIn("indirect.no.sigma@iterable.com", report)
+
+    def test_value_engineering_reports_to_katie_barends(self):
+        self.assertEqual(MODULE.VE_MANAGER_EMAIL, "katie.barends@iterable.com")
+        self.assertEqual(MODULE.VE_TEAM_LABEL, "Value Engineering (Katie Barends)")
+
+    def test_yes_adds_missing_people_as_view_and_reprints_breakdown(self):
+        workers = [
+            ReportingWorker("ada@iterable.com", "Lovelace, Ada", 1, "teri.hatfield@iterable.com"),
+            ReportingWorker("no.sigma@iterable.com", "Barends, Katie Leigh", 2, "ada@iterable.com"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="ada@iterable.com",
+                member_id="m-1",
+                first_name="Ada",
+                last_name="Lovelace",
+                member_type="Admin",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            )
+        ]
+        prompts = []
+
+        class CreatingClient:
+            def __init__(self):
+                self.members = [
+                    {
+                        "memberId": "m-1",
+                        "email": "ada@iterable.com",
+                        "firstName": "Ada",
+                        "lastName": "Lovelace",
+                        "memberType": "Admin",
+                        "userKind": "internal",
+                        "isArchived": False,
+                        "isInactive": False,
+                    }
+                ]
+                self.created = []
+
+            def load_account_types_map(self):
+                return {"Admin": "Build", "View": "View"}
+
+            def load_members(self):
+                return list(self.members)
+
+            def create_member(self, email, first_name, last_name, member_type="View"):
+                created = {
+                    "memberId": "m-new",
+                    "email": email,
+                    "firstName": first_name,
+                    "lastName": last_name,
+                    "memberType": member_type,
+                    "userKind": "internal",
+                    "isArchived": False,
+                    "isInactive": False,
+                }
+                self.created.append(created)
+                self.members.append(created)
+                return created
+
+        client = CreatingClient()
+
+        def answer(prompt):
+            prompts.append(prompt)
+            return "y"
+
+        updated = MODULE.offer_missing_view_accounts(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier={"Admin": "Build", "View": "View"},
+            label="GTM Team (Teri Hatfield)",
+            manager_email="teri.hatfield@iterable.com",
+            input_fn=answer,
+            isatty=True,
+        )
+        self.assertIn("View license", prompts[0])
+        self.assertEqual(client.created[0]["email"], "no.sigma@iterable.com")
+        self.assertEqual(client.created[0]["firstName"], "Katie Leigh")
+        self.assertEqual(client.created[0]["lastName"], "Barends")
+        self.assertEqual(client.created[0]["memberType"], "View")
+        self.assertIn("Updated license breakdown", updated)
+        table_rows = {
+            line.split("|")[1].strip(): [cell.strip() for cell in line.split("|")[2:-1]]
+            for line in updated.splitlines()
+            if line.startswith("| ") and line.split("|")[1].strip() in {"Direct", "Indirect", "Total"}
+        }
+        self.assertEqual(table_rows["Total"], ["2", "1", "0", "0", "1", "0"])
+
+    def test_no_and_non_tty_do_not_create_view_accounts(self):
+        workers = [
+            ReportingWorker("no.sigma@iterable.com", "Missing Person", 1, "katie.barends@iterable.com"),
+        ]
+
+        class CreatingClient:
+            def __init__(self):
+                self.created = []
+
+            def create_member(self, *args, **kwargs):
+                self.created.append((args, kwargs))
+
+        client = CreatingClient()
+        declined = MODULE.offer_missing_view_accounts(
+            workers=workers,
+            records=[],
+            client=client,
+            type_to_tier={"View": "View"},
+            label="Value Engineering (Katie Barends)",
+            manager_email="katie.barends@iterable.com",
+            input_fn=lambda _prompt: "n",
+            isatty=True,
+        )
+        self.assertIsNone(declined)
+        self.assertEqual(client.created, [])
+
+        def explode(_prompt):
+            raise AssertionError("prompted without a tty")
+
+        skipped = MODULE.offer_missing_view_accounts(
+            workers=workers,
+            records=[],
+            client=client,
+            type_to_tier={"View": "View"},
+            label="Value Engineering (Katie Barends)",
+            manager_email="katie.barends@iterable.com",
+            input_fn=explode,
+            isatty=False,
+        )
+        self.assertIsNone(skipped)
+        self.assertEqual(client.created, [])
+
     def test_derive_tier_from_permissions(self):
         self.assertEqual(derive_tier_from_permissions(["edit-workbook"]), "Build")
         self.assertEqual(derive_tier_from_permissions(["manage-users", "view-connections"]), "Build")
