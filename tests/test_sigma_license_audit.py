@@ -416,6 +416,104 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIsNone(declined)
         self.assertEqual(client.updates, [])
 
+    def _subteam_fixture(self):
+        workers = [
+            ReportingWorker("katie.barends@iterable.com", "Barends, Katie Leigh", 1, "teri.hatfield@iterable.com"),
+            ReportingWorker("ada@iterable.com", "Lovelace, Ada", 2, "katie.barends@iterable.com"),
+            ReportingWorker("no.sigma@iterable.com", "Missing Person", 3, "ada@iterable.com"),
+            ReportingWorker("seth.charles@iterable.com", "Charles, Seth", 1, "teri.hatfield@iterable.com"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="ada@iterable.com",
+                member_id="m-ada",
+                first_name="Ada",
+                last_name="Lovelace",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            )
+        ]
+        return workers, records
+
+    def test_subteam_breakdown_includes_everyone_below_the_lead(self):
+        workers, records = self._subteam_fixture()
+        leads = MODULE.direct_subteam_leads(workers, "teri.hatfield@iterable.com")
+        self.assertEqual([lead.email for lead in leads], ["katie.barends@iterable.com"])
+        subtree = MODULE.rebase_subtree(workers, "katie.barends@iterable.com")
+        self.assertEqual([(worker.email, worker.depth) for worker in subtree], [
+            ("ada@iterable.com", 1),
+            ("no.sigma@iterable.com", 2),
+        ])
+        summary = MODULE.render_subteam_summary(
+            workers, records, "teri.hatfield@iterable.com"
+        )
+        self.assertIn("Barends, Katie Leigh", summary)
+        self.assertIn("Sub teams", summary)
+        table_rows = {
+            line.split("|")[1].strip(): [cell.strip() for cell in line.split("|")[2:-1]]
+            for line in summary.splitlines()
+            if line.startswith("| ") and "Barends" in line
+        }
+        self.assertEqual(table_rows["Barends, Katie Leigh"], ["2", "0", "0", "0", "1", "1"])
+
+    def test_subteam_fzf_upgrades_only_the_selected_view_member(self):
+        workers, records = self._subteam_fixture()
+
+        class UpgradingClient:
+            def __init__(self):
+                self.members = [
+                    {
+                        "memberId": "m-ada",
+                        "email": "ada@iterable.com",
+                        "firstName": "Ada",
+                        "lastName": "Lovelace",
+                        "memberType": "View",
+                        "userKind": "internal",
+                        "isArchived": False,
+                        "isInactive": False,
+                    }
+                ]
+                self.updates = []
+
+            def load_members(self):
+                return list(self.members)
+
+            def update_member_type(self, member_id, member_type="View"):
+                self.updates.append((member_id, member_type))
+                for member in self.members:
+                    if member["memberId"] == member_id:
+                        member["memberType"] = member_type
+                return {"memberType": member_type}
+
+        client = UpgradingClient()
+        choices = iter(["katie.barends@iterable.com", "people", "q"])
+
+        def pick_choice(entries, **_kwargs):
+            return next(choices)
+
+        def pick_multi(entries, **_kwargs):
+            self.assertEqual([key for key, _label in entries], ["ada@iterable.com"])
+            return ["ada@iterable.com"]
+
+        MODULE.browse_subteams(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier={"View": "View", "Act+": "Act", "Act": "Build"},
+            manager_email="teri.hatfield@iterable.com",
+            manager_label="GTM Team (Teri Hatfield)",
+            input_fn=lambda _prompt: "y",
+            pick_choice=pick_choice,
+            pick_multi=pick_multi,
+            isatty=True,
+        )
+        self.assertEqual(client.updates, [("m-ada", "Act+")])
+
     def test_derive_tier_from_permissions(self):
         self.assertEqual(derive_tier_from_permissions(["edit-workbook"]), "Build")
         self.assertEqual(derive_tier_from_permissions(["manage-users", "view-connections"]), "Build")

@@ -1097,37 +1097,88 @@ def offer_missing_view_accounts(
     return "\n".join(lines)
 
 
-def offer_upgrade_view_to_act_plus(
-    *,
+def direct_subteam_leads(
+    workers: list[ReportingWorker],
+    manager_email: str,
+) -> list[ReportingWorker]:
+    """Direct reports who themselves have at least one person below them."""
+    manager = manager_email.casefold()
+    child_managers = {worker.manager_email.casefold() for worker in workers}
+    leads = [
+        worker
+        for worker in workers
+        if worker.manager_email.casefold() == manager and worker.email.casefold() in child_managers
+    ]
+    return sorted(leads, key=lambda worker: (worker.full_name.casefold(), worker.email))
+
+
+def rebase_subtree(workers: list[ReportingWorker], lead_email: str) -> list[ReportingWorker]:
+    """People under a lead, with depths restarted so that lead's directs are depth 1."""
+    children: dict[str, list[ReportingWorker]] = {}
+    for worker in workers:
+        children.setdefault(worker.manager_email.casefold(), []).append(worker)
+    for group in children.values():
+        group.sort(key=lambda worker: (worker.full_name.casefold(), worker.email))
+    subtree: list[ReportingWorker] = []
+
+    def walk(email: str, depth: int) -> None:
+        for child in children.get(email, []):
+            subtree.append(
+                ReportingWorker(
+                    email=child.email,
+                    full_name=child.full_name,
+                    depth=depth,
+                    manager_email=child.manager_email,
+                )
+            )
+            walk(child.email.casefold(), depth + 1)
+
+    walk(lead_email.casefold(), 1)
+    return subtree
+
+
+def render_subteam_summary(
     workers: list[ReportingWorker],
     records: list[MemberAuditRecord],
-    client: SigmaClient,
-    type_to_tier: dict[str, str] | None,
-    label: str,
     manager_email: str,
-    input_fn=input,
-    isatty: bool | None = None,
-) -> str | None:
-    """Ask whether View team members should be upgraded to the Act+ account type."""
+) -> str:
+    leads = direct_subteam_leads(workers, manager_email)
+    if not leads:
+        return ""
+    tiers = ("Build", "Analyze", "Act", "View", "No Sigma account")
+    table_rows = []
+    for lead in leads:
+        selected = build_team_license_rows(rebase_subtree(workers, lead.email), records)
+        counts = [str(sum(row.license_type == tier for row in selected)) for tier in tiers]
+        table_rows.append([lead.full_name, str(len(selected)), *counts])
+    table = ascii_table(
+        ["Sub team", "People", *tiers],
+        table_rows,
+        numeric_columns={1, 2, 3, 4, 5, 6},
+    )
+    return "\n".join(["Sub teams", table])
+
+
+def view_member_targets(
+    rows: list[TeamLicenseRecord],
+    records: list[MemberAuditRecord],
+) -> list[MemberAuditRecord]:
     by_email = {record.email.casefold(): record for record in records}
     targets = []
-    for row in build_team_license_rows(workers, records):
+    for row in rows:
         if row.license_type != "View":
             continue
         record = by_email.get(row.email.casefold())
         if record and record.member_id:
             targets.append(record)
-    if not targets:
-        return None
-    interactive = sys.stdin.isatty() if isatty is None else isatty
-    if not interactive:
-        return None
-    answer = input_fn(
-        f"\nUpgrade {len(targets)} team members from View to Act+? [y/N] "
-    ).strip().lower()
-    if answer not in {"y", "yes"}:
-        return None
+    return targets
 
+
+def apply_view_to_act_plus(
+    client: SigmaClient,
+    targets: list[MemberAuditRecord],
+    type_to_tier: dict[str, str] | None,
+) -> tuple[int, list[str], list[MemberAuditRecord], dict[str, str], str]:
     tiers = account_type_tiers(client, type_to_tier)
     member_type = resolve_act_plus_account_type(tiers)
     upgraded = 0
@@ -1138,8 +1189,20 @@ def offer_upgrade_view_to_act_plus(
             upgraded += 1
         except Exception as exc:
             failures.append(f"{record.email}: {exc}")
-
     refreshed = build_audit_records(client.load_members(), [], tiers, activities={})
+    return upgraded, failures, refreshed, tiers, member_type
+
+
+def upgrade_result_report(
+    *,
+    label: str,
+    workers: list[ReportingWorker],
+    refreshed: list[MemberAuditRecord],
+    manager_email: str,
+    upgraded: int,
+    member_type: str,
+    failures: list[str],
+) -> str:
     report = render_team_license_report(
         label,
         build_team_license_rows(workers, refreshed),
@@ -1152,6 +1215,268 @@ def offer_upgrade_view_to_act_plus(
         lines.extend(f"  {item}" for item in failures)
     lines.extend(["", "Updated license breakdown", report])
     return "\n".join(lines)
+
+
+def offer_upgrade_view_to_act_plus(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    label: str,
+    manager_email: str,
+    input_fn=input,
+    isatty: bool | None = None,
+) -> str | None:
+    """Ask whether View team members should be upgraded to the Act+ account type."""
+    targets = view_member_targets(build_team_license_rows(workers, records), records)
+    if not targets:
+        return None
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not interactive:
+        return None
+    answer = input_fn(
+        f"\nUpgrade {len(targets)} team members from View to Act+? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return None
+
+    upgraded, failures, refreshed, _tiers, member_type = apply_view_to_act_plus(
+        client, targets, type_to_tier
+    )
+    return upgrade_result_report(
+        label=label,
+        workers=workers,
+        refreshed=refreshed,
+        manager_email=manager_email,
+        upgraded=upgraded,
+        member_type=member_type,
+        failures=failures,
+    )
+
+
+def offer_pick_view_members(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    label: str,
+    manager_email: str,
+    input_fn=input,
+    pick_multi=None,
+    isatty: bool | None = None,
+) -> list[MemberAuditRecord]:
+    """fzf for upgrading individual View members. Returns the records to keep using."""
+    targets = view_member_targets(build_team_license_rows(workers, records), records)
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not targets or not interactive:
+        return records
+    answer = input_fn(
+        f"\nPick individual View members to upgrade to Act+? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return records
+    picker = pick_multi or fzf_pick_multi
+    selected = {
+        email.casefold()
+        for email in picker(
+            [(target.email, f"{target.full_name}  <{target.email}>") for target in targets],
+            prompt="view member > ",
+            header=f"{label} · Tab toggles · Enter upgrades the selected View members to Act+",
+        )
+    }
+    chosen = [target for target in targets if target.email.casefold() in selected]
+    if not chosen:
+        return records
+    upgraded, failures, refreshed, _tiers, member_type = apply_view_to_act_plus(
+        client, chosen, type_to_tier
+    )
+    print(
+        "\n"
+        + upgrade_result_report(
+            label=label,
+            workers=workers,
+            refreshed=refreshed,
+            manager_email=manager_email,
+            upgraded=upgraded,
+            member_type=member_type,
+            failures=failures,
+        )
+    )
+    return refreshed
+
+
+def browse_subteams(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    manager_email: str,
+    manager_label: str,
+    input_fn=input,
+    pick_choice=None,
+    pick_multi=None,
+    isatty: bool | None = None,
+) -> list[MemberAuditRecord]:
+    """Show each direct sub team, including everyone below that lead, then upgrade."""
+    leads = direct_subteam_leads(workers, manager_email)
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not leads or not interactive:
+        return records
+    answer = input_fn(
+        f"\nBrowse {len(leads)} sub teams under {manager_label}? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return records
+
+    choose = pick_choice or fzf_pick_choice
+    picker = pick_multi or fzf_pick_multi
+    print("\n" + render_subteam_summary(workers, records, manager_email))
+    while True:
+        entries = []
+        for lead in direct_subteam_leads(workers, manager_email):
+            subtree = rebase_subtree(workers, lead.email)
+            view_count = sum(
+                row.license_type == "View"
+                for row in build_team_license_rows(subtree, records)
+            )
+            entries.append(
+                (lead.email, f"{lead.full_name}  ·  {len(subtree)} people  ·  View {view_count}")
+            )
+        entries.append(("q", "Done"))
+        choice = choose(
+            entries,
+            prompt="sub team > ",
+            header=f"Sub teams under {manager_label} · counts include everyone below the lead",
+        )
+        if not choice or choice == "q":
+            return records
+        lead = next(
+            (item for item in leads if item.email.casefold() == choice.casefold()),
+            None,
+        )
+        if lead is None:
+            return records
+        records = _present_subteam(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier=type_to_tier,
+            lead=lead,
+            input_fn=input_fn,
+            pick_choice=choose,
+            pick_multi=picker,
+            isatty=interactive,
+        )
+
+
+def _present_subteam(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    lead: ReportingWorker,
+    input_fn,
+    pick_choice,
+    pick_multi,
+    isatty: bool,
+) -> list[MemberAuditRecord]:
+    subtree = rebase_subtree(workers, lead.email)
+    label = f"Sub team: {lead.full_name}"
+    rows = build_team_license_rows(subtree, records)
+    print(
+        "\n"
+        + render_team_license_report(
+            label,
+            rows,
+            manager_email=lead.email,
+            include_employees=False,
+        )
+    )
+    below = render_subteam_summary(workers, records, lead.email)
+    if below:
+        print("\n" + below)
+    actions = [
+        ("people", "Upgrade individuals from View to Act+"),
+        ("entire", "Upgrade this entire sub team from View to Act+"),
+        ("list", "Show the detailed user list"),
+    ]
+    if direct_subteam_leads(workers, lead.email):
+        actions.append(("below", "Open sub teams below"))
+    actions.append(("back", "Back"))
+    action = pick_choice(
+        actions,
+        prompt="sub team action > ",
+        header=f"{lead.full_name} · this team and everyone below",
+    )
+    if action == "list":
+        print("\n" + render_team_employee_list(rows))
+        return records
+    if action == "people":
+        targets = view_member_targets(rows, records)
+        if not targets:
+            print("No View members in this sub team.")
+            return records
+        selected = {
+            email.casefold()
+            for email in pick_multi(
+                [(target.email, f"{target.full_name}  <{target.email}>") for target in targets],
+                prompt="view member > ",
+                header=f"{lead.full_name} · Tab toggles · Enter upgrades selected View members to Act+",
+            )
+        }
+        chosen = [target for target in targets if target.email.casefold() in selected]
+        if not chosen:
+            return records
+        upgraded, failures, refreshed, _tiers, member_type = apply_view_to_act_plus(
+            client, chosen, type_to_tier
+        )
+        print(
+            "\n"
+            + upgrade_result_report(
+                label=label,
+                workers=subtree,
+                refreshed=refreshed,
+                manager_email=lead.email,
+                upgraded=upgraded,
+                member_type=member_type,
+                failures=failures,
+            )
+        )
+        return refreshed
+    if action == "entire":
+        updated = offer_upgrade_view_to_act_plus(
+            workers=subtree,
+            records=records,
+            client=client,
+            type_to_tier=type_to_tier,
+            label=label,
+            manager_email=lead.email,
+            input_fn=input_fn,
+            isatty=isatty,
+        )
+        if not updated:
+            return records
+        print("\n" + updated)
+        tiers = account_type_tiers(client, type_to_tier)
+        return build_audit_records(client.load_members(), [], tiers, activities={})
+    if action == "below":
+        return browse_subteams(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier=type_to_tier,
+            manager_email=lead.email,
+            manager_label=lead.full_name,
+            input_fn=input_fn,
+            pick_choice=pick_choice,
+            pick_multi=pick_multi,
+            isatty=isatty,
+        )
+    return records
 
 
 def run_reporting_team_prompt(
@@ -1201,15 +1526,33 @@ def run_reporting_team_prompt(
         label=label,
         manager_email=manager_email,
     )
+    latest_records = current_records
+    latest_tiers = current_tiers
     if upgraded:
         print("\n" + upgraded)
-        final_tiers = account_type_tiers(client, current_tiers)
-        final_records = build_audit_records(
-            client.load_members(), [], final_tiers, activities={}
+        latest_tiers = account_type_tiers(client, current_tiers)
+        latest_records = build_audit_records(
+            client.load_members(), [], latest_tiers, activities={}
         )
-        listed = offer_show_employee_list(build_team_license_rows(workers, final_records))
+        listed = offer_show_employee_list(build_team_license_rows(workers, latest_records))
         if listed:
             print("\n" + listed)
+    latest_records = offer_pick_view_members(
+        workers=workers,
+        records=latest_records,
+        client=client,
+        type_to_tier=latest_tiers,
+        label=label,
+        manager_email=manager_email,
+    )
+    browse_subteams(
+        workers=workers,
+        records=latest_records,
+        client=client,
+        type_to_tier=latest_tiers,
+        manager_email=manager_email,
+        manager_label=label,
+    )
 
 
 def format_ts_date(ts: str) -> str:
