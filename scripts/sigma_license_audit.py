@@ -1319,17 +1319,19 @@ def browse_subteams(
     pick_choice=None,
     pick_multi=None,
     isatty: bool | None = None,
+    confirm_browse: bool = True,
 ) -> list[MemberAuditRecord]:
     """Show each direct sub team, including everyone below that lead, then upgrade."""
     leads = direct_subteam_leads(workers, manager_email)
     interactive = sys.stdin.isatty() if isatty is None else isatty
     if not leads or not interactive:
         return records
-    answer = input_fn(
-        f"\nBrowse {len(leads)} sub teams under {manager_label}? [y/N] "
-    ).strip().lower()
-    if answer not in {"y", "yes"}:
-        return records
+    if confirm_browse:
+        answer = input_fn(
+            f"\nBrowse {len(leads)} sub teams under {manager_label}? [y/N] "
+        ).strip().lower()
+        if answer not in {"y", "yes"}:
+            return records
 
     choose = pick_choice or fzf_pick_choice
     picker = pick_multi or fzf_pick_multi
@@ -1399,18 +1401,19 @@ def _present_subteam(
     below = render_subteam_summary(workers, records, lead.email)
     if below:
         print("\n" + below)
+    child_leads = direct_subteam_leads(workers, lead.email)
     actions = [
+        ("upgrade", "Upgrade all View members to Act+"),
         ("people", "Upgrade individuals from View to Act+"),
-        ("entire", "Upgrade this entire sub team from View to Act+"),
         ("list", "Show the detailed user list"),
     ]
-    if direct_subteam_leads(workers, lead.email):
-        actions.append(("below", "Open sub teams below"))
+    if child_leads:
+        actions.append(("cascade", "Cascade to the next level"))
     actions.append(("back", "Back"))
     action = pick_choice(
         actions,
         prompt="sub team action > ",
-        header=f"{lead.full_name} · this team and everyone below",
+        header=f"{lead.full_name} · breakdown above · upgrade all viewers or cascade down",
     )
     if action == "list":
         print("\n" + render_team_employee_list(rows))
@@ -1447,7 +1450,7 @@ def _present_subteam(
             )
         )
         return refreshed
-    if action == "entire":
+    if action in {"upgrade", "entire"}:
         updated = offer_upgrade_view_to_act_plus(
             workers=subtree,
             records=records,
@@ -1462,8 +1465,25 @@ def _present_subteam(
             return records
         print("\n" + updated)
         tiers = account_type_tiers(client, type_to_tier)
-        return build_audit_records(client.load_members(), [], tiers, activities={})
-    if action == "below":
+        refreshed = build_audit_records(client.load_members(), [], tiers, activities={})
+        if child_leads:
+            carry_on = input_fn("\nCascade to the next level? [y/N] ").strip().lower()
+            if carry_on in {"y", "yes"}:
+                return browse_subteams(
+                    workers=workers,
+                    records=refreshed,
+                    client=client,
+                    type_to_tier=tiers,
+                    manager_email=lead.email,
+                    manager_label=lead.full_name,
+                    input_fn=input_fn,
+                    pick_choice=pick_choice,
+                    pick_multi=pick_multi,
+                    isatty=isatty,
+                    confirm_browse=False,
+                )
+        return refreshed
+    if action in {"cascade", "below"}:
         return browse_subteams(
             workers=workers,
             records=records,
@@ -1475,6 +1495,7 @@ def _present_subteam(
             pick_choice=pick_choice,
             pick_multi=pick_multi,
             isatty=isatty,
+            confirm_browse=False,
         )
     return records
 

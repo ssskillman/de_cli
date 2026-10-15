@@ -514,6 +514,97 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         )
         self.assertEqual(client.updates, [("m-ada", "Act+")])
 
+    def test_cascade_stops_at_the_lowest_team_and_upgrades_its_viewers(self):
+        workers, records = self._subteam_fixture()
+        workers = [
+            *workers,
+            ReportingWorker("leaf@iterable.com", "Leaf Viewer", 3, "ada@iterable.com"),
+        ]
+        records = [
+            *records,
+            MemberAuditRecord(
+                email="leaf@iterable.com",
+                member_id="m-leaf",
+                first_name="Leaf",
+                last_name="Viewer",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+        ]
+
+        class UpgradingClient:
+            def __init__(self):
+                self.members = [
+                    {
+                        "memberId": "m-ada",
+                        "email": "ada@iterable.com",
+                        "firstName": "Ada",
+                        "lastName": "Lovelace",
+                        "memberType": "View",
+                        "userKind": "internal",
+                        "isArchived": False,
+                        "isInactive": False,
+                    },
+                    {
+                        "memberId": "m-leaf",
+                        "email": "leaf@iterable.com",
+                        "firstName": "Leaf",
+                        "lastName": "Viewer",
+                        "memberType": "View",
+                        "userKind": "internal",
+                        "isArchived": False,
+                        "isInactive": False,
+                    },
+                ]
+                self.updates = []
+
+            def load_members(self):
+                return list(self.members)
+
+            def update_member_type(self, member_id, member_type="View"):
+                self.updates.append((member_id, member_type))
+                for member in self.members:
+                    if member["memberId"] == member_id:
+                        member["memberType"] = member_type
+                return {"memberType": member_type}
+
+        client = UpgradingClient()
+        choices = iter([
+            "katie.barends@iterable.com",
+            "cascade",
+            "ada@iterable.com",
+            "upgrade",
+            "q",
+            "q",
+        ])
+
+        def pick_choice(entries, **_kwargs):
+            keys = [key for key, _label in entries]
+            choice = next(choices)
+            if choice == "upgrade":
+                self.assertNotIn("cascade", keys)
+                self.assertIn("upgrade", keys)
+            return choice
+
+        MODULE.browse_subteams(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier={"View": "View", "Act+": "Act", "Act": "Build"},
+            manager_email="teri.hatfield@iterable.com",
+            manager_label="GTM Team (Teri Hatfield)",
+            input_fn=lambda _prompt: "y",
+            pick_choice=pick_choice,
+            pick_multi=lambda entries, **_kwargs: [],
+            isatty=True,
+        )
+        self.assertEqual(client.updates, [("m-leaf", "Act+")])
+
     def test_derive_tier_from_permissions(self):
         self.assertEqual(derive_tier_from_permissions(["edit-workbook"]), "Build")
         self.assertEqual(derive_tier_from_permissions(["manage-users", "view-connections"]), "Build")
