@@ -117,6 +117,7 @@ class ReportingWorker:
     full_name: str
     depth: int
     manager_email: str
+    job_title: str = ""
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ class TeamLicenseRecord:
     license_type: str
     member_type: str
     sigma_status: str
+    job_title: str = ""
 
 
 @dataclass
@@ -451,14 +453,29 @@ names AS (
         ) AS rn
     FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.PERSON_HISTORY
 ),
+titles AS (
+    SELECT
+        WORKER_ID,
+        JOB_TITLE AS job_title,
+        ROW_NUMBER() OVER (
+            PARTITION BY WORKER_ID
+            ORDER BY
+                IFF(COALESCE(PRIMARY_INDICATOR, FALSE), 0, 1),
+                JOB_EFFECTIVE_DATE DESC NULLS LAST,
+                _FIVETRAN_SYNCED DESC
+        ) AS rn
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORK_ASSIGNMENT_HISTORY
+),
 active_workers AS (
     SELECT
         w.ID AS worker_id,
         e.email,
-        n.full_name
+        n.full_name,
+        t.job_title
     FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORKER w
     JOIN emails e ON e.WORKER_ID = w.ID AND e.rn = 1
     LEFT JOIN names n ON n.WORKER_ID = w.ID AND n.rn = 1
+    LEFT JOIN titles t ON t.WORKER_ID = w.ID AND t.rn = 1
     WHERE (w.TERMINATION_DATE IS NULL OR w.TERMINATION_DATE > CURRENT_DATE())
       AND COALESCE(w._FIVETRAN_DELETED, FALSE) = FALSE
     QUALIFY ROW_NUMBER() OVER (
@@ -477,11 +494,12 @@ reporting AS (
             _FIVETRAN_SYNCED DESC
     ) = 1
 ),
-org (worker_id, email, full_name, manager_email, depth, worker_path) AS (
+org (worker_id, email, full_name, job_title, manager_email, depth, worker_path) AS (
     SELECT
         w.worker_id,
         w.email,
         w.full_name,
+        w.job_title,
         '',
         0,
         ARRAY_CONSTRUCT(w.worker_id)
@@ -494,6 +512,7 @@ org (worker_id, email, full_name, manager_email, depth, worker_path) AS (
         w.worker_id,
         w.email,
         w.full_name,
+        w.job_title,
         org.email,
         org.depth + 1,
         ARRAY_APPEND(org.worker_path, w.worker_id)
@@ -502,7 +521,7 @@ org (worker_id, email, full_name, manager_email, depth, worker_path) AS (
     JOIN active_workers w ON w.worker_id = r.WORKER_ID
     WHERE NOT ARRAY_CONTAINS(w.worker_id::VARIANT, org.worker_path)
 )
-SELECT email, COALESCE(full_name, email), depth, manager_email
+SELECT email, COALESCE(full_name, email), depth, manager_email, COALESCE(job_title, '')
 FROM org
 ORDER BY depth, full_name, email;
 """.strip()
@@ -613,6 +632,7 @@ ORDER BY depth, full_name, email;
                 full_name=str(row[1] or row[0]).strip(),
                 depth=int(row[2]),
                 manager_email=str(row[3] or "").strip().lower(),
+                job_title=str(row[4] or "").strip(),
             )
             for row in rows
             if row[0] and int(row[2]) > 0
@@ -857,6 +877,7 @@ def build_team_license_rows(
                 license_type=sigma.license_type if sigma else "No Sigma account",
                 member_type=sigma.member_type if sigma else "—",
                 sigma_status=sigma.sigma_status if sigma else "—",
+                job_title=worker.job_title,
             )
         )
     return sorted(
@@ -895,13 +916,14 @@ def ascii_table(headers: list[str], rows: list[list[str]], numeric_columns: set[
 
 def render_team_employee_list(rows: list[TeamLicenseRecord]) -> str:
     people = ascii_table(
-        ["#", "Relationship", "Depth", "Employee", "Email", "License", "Account type", "Status"],
+        ["#", "Relationship", "Depth", "Employee", "Job title", "Email", "License", "Account type", "Status"],
         [
             [
                 str(index),
                 row.relationship,
                 str(row.depth),
                 row.full_name,
+                row.job_title,
                 row.email,
                 row.license_type,
                 row.member_type,
@@ -1129,6 +1151,7 @@ def rebase_subtree(workers: list[ReportingWorker], lead_email: str) -> list[Repo
                     full_name=child.full_name,
                     depth=depth,
                     manager_email=child.manager_email,
+                    job_title=child.job_title,
                 )
             )
             walk(child.email.casefold(), depth + 1)

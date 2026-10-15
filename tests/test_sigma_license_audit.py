@@ -117,6 +117,23 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIn("| Relationship |", report)
         self.assertIn("indirect.no.sigma@iterable.com", report)
 
+    def test_employee_list_includes_job_title(self):
+        rows = build_team_license_rows(
+            [
+                ReportingWorker(
+                    "ada@iterable.com",
+                    "Lovelace, Ada",
+                    1,
+                    "teri.hatfield@iterable.com",
+                    "Staff Engineer",
+                )
+            ],
+            [],
+        )
+        listing = MODULE.render_team_employee_list(rows)
+        self.assertIn("Job title", listing)
+        self.assertIn("Staff Engineer", listing)
+
     def test_detailed_user_list_is_shown_only_after_yes(self):
         rows = build_team_license_rows(
             [ReportingWorker("ada@iterable.com", "Lovelace, Ada", 1, "teri.hatfield@iterable.com")],
