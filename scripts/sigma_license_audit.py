@@ -1002,6 +1002,24 @@ def resolve_view_account_type(type_to_tier: dict[str, str]) -> str:
     return "View"
 
 
+def resolve_act_plus_account_type(type_to_tier: dict[str, str]) -> str:
+    """Iterable's Act+ account type is the Act license. The account type named Act is Build."""
+    for name, tier in type_to_tier.items():
+        if str(name).casefold() == "act+" and str(tier) == "Act":
+            return str(name)
+    for name in type_to_tier:
+        if str(name).casefold() == "act+":
+            return str(name)
+    return "Act+"
+
+
+def account_type_tiers(client: SigmaClient, type_to_tier: dict[str, str] | None) -> dict[str, str]:
+    tiers = dict(type_to_tier or {})
+    if not tiers and hasattr(client, "load_account_types_map"):
+        tiers = client.load_account_types_map()
+    return tiers
+
+
 def offer_missing_view_accounts(
     *,
     workers: list[ReportingWorker],
@@ -1031,9 +1049,7 @@ def offer_missing_view_accounts(
     if answer not in {"y", "yes"}:
         return None
 
-    tiers = dict(type_to_tier or {})
-    if not tiers and hasattr(client, "load_account_types_map"):
-        tiers = client.load_account_types_map()
+    tiers = account_type_tiers(client, type_to_tier)
     member_type = resolve_view_account_type(tiers)
     created = 0
     failures: list[str] = []
@@ -1052,6 +1068,62 @@ def offer_missing_view_accounts(
         manager_email=manager_email,
     )
     lines = [f"Created {created} View account(s)."]
+    if failures:
+        lines.append("Failed:")
+        lines.extend(f"  {item}" for item in failures)
+    lines.extend(["", "Updated license breakdown", report])
+    return "\n".join(lines)
+
+
+def offer_upgrade_view_to_act_plus(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    label: str,
+    manager_email: str,
+    input_fn=input,
+    isatty: bool | None = None,
+) -> str | None:
+    """Ask whether View team members should be upgraded to the Act+ account type."""
+    by_email = {record.email.casefold(): record for record in records}
+    targets = []
+    for row in build_team_license_rows(workers, records):
+        if row.license_type != "View":
+            continue
+        record = by_email.get(row.email.casefold())
+        if record and record.member_id:
+            targets.append(record)
+    if not targets:
+        return None
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not interactive:
+        return None
+    answer = input_fn(
+        f"\nUpgrade {len(targets)} team members from View to Act+? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return None
+
+    tiers = account_type_tiers(client, type_to_tier)
+    member_type = resolve_act_plus_account_type(tiers)
+    upgraded = 0
+    failures: list[str] = []
+    for record in targets:
+        try:
+            client.update_member_type(record.member_id, member_type)
+            upgraded += 1
+        except Exception as exc:
+            failures.append(f"{record.email}: {exc}")
+
+    refreshed = build_audit_records(client.load_members(), [], tiers, activities={})
+    report = render_team_license_report(
+        label,
+        build_team_license_rows(workers, refreshed),
+        manager_email=manager_email,
+    )
+    lines = [f"Upgraded {upgraded} account(s) from View to {member_type}."]
     if failures:
         lines.append("Failed:")
         lines.extend(f"  {item}" for item in failures)
@@ -1082,8 +1154,24 @@ def run_reporting_team_prompt(
         label=label,
         manager_email=manager_email,
     )
+    current_records = records
+    current_tiers = type_to_tier
     if updated:
         print("\n" + updated)
+        current_tiers = account_type_tiers(client, type_to_tier)
+        current_records = build_audit_records(
+            client.load_members(), [], current_tiers, activities={}
+        )
+    upgraded = offer_upgrade_view_to_act_plus(
+        workers=workers,
+        records=current_records,
+        client=client,
+        type_to_tier=current_tiers,
+        label=label,
+        manager_email=manager_email,
+    )
+    if upgraded:
+        print("\n" + upgraded)
 
 
 def format_ts_date(ts: str) -> str:

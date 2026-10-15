@@ -251,6 +251,139 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIsNone(skipped)
         self.assertEqual(client.created, [])
 
+    def test_yes_upgrades_view_team_members_to_act_plus(self):
+        workers = [
+            ReportingWorker("view.user@iterable.com", "View User", 1, "teri.hatfield@iterable.com"),
+            ReportingWorker("builder@iterable.com", "Builder User", 1, "teri.hatfield@iterable.com"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="view.user@iterable.com",
+                member_id="m-view",
+                first_name="View",
+                last_name="User",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+            MemberAuditRecord(
+                email="builder@iterable.com",
+                member_id="m-build",
+                first_name="Builder",
+                last_name="User",
+                member_type="build",
+                license_type="Build",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+        ]
+        prompts = []
+
+        class UpgradingClient:
+            def __init__(self):
+                self.members = [
+                    {
+                        "memberId": "m-view",
+                        "email": "view.user@iterable.com",
+                        "firstName": "View",
+                        "lastName": "User",
+                        "memberType": "View",
+                        "userKind": "internal",
+                        "isArchived": False,
+                        "isInactive": False,
+                    },
+                    {
+                        "memberId": "m-build",
+                        "email": "builder@iterable.com",
+                        "firstName": "Builder",
+                        "lastName": "User",
+                        "memberType": "build",
+                        "userKind": "internal",
+                        "isArchived": False,
+                        "isInactive": False,
+                    },
+                ]
+                self.updates = []
+
+            def load_members(self):
+                return list(self.members)
+
+            def update_member_type(self, member_id, member_type="View"):
+                self.updates.append((member_id, member_type))
+                for member in self.members:
+                    if member["memberId"] == member_id:
+                        member["memberType"] = member_type
+                return {"status": "ok"}
+
+        client = UpgradingClient()
+        updated = MODULE.offer_upgrade_view_to_act_plus(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier={"View": "View", "Act+": "Act", "Act": "Build", "build": "Build"},
+            label="GTM Team (Teri Hatfield)",
+            manager_email="teri.hatfield@iterable.com",
+            input_fn=lambda prompt: prompts.append(prompt) or "y",
+            isatty=True,
+        )
+        self.assertIn("Act+", prompts[0])
+        self.assertEqual(client.updates, [("m-view", "Act+")])
+        self.assertIn("Updated license breakdown", updated)
+        table_rows = {
+            line.split("|")[1].strip(): [cell.strip() for cell in line.split("|")[2:-1]]
+            for line in updated.splitlines()
+            if line.startswith("| ") and line.split("|")[1].strip() in {"Direct", "Indirect", "Total"}
+        }
+        self.assertEqual(table_rows["Total"], ["2", "1", "0", "1", "0", "0"])
+
+    def test_no_does_not_upgrade_view_members_to_act_plus(self):
+        workers = [
+            ReportingWorker("view.user@iterable.com", "View User", 1, "katie.barends@iterable.com"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="view.user@iterable.com",
+                member_id="m-view",
+                first_name="View",
+                last_name="User",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            )
+        ]
+
+        class UpgradingClient:
+            def __init__(self):
+                self.updates = []
+
+            def update_member_type(self, member_id, member_type="View"):
+                self.updates.append((member_id, member_type))
+
+        client = UpgradingClient()
+        declined = MODULE.offer_upgrade_view_to_act_plus(
+            workers=workers,
+            records=records,
+            client=client,
+            type_to_tier={"Act+": "Act"},
+            label="Value Engineering (Katie Barends)",
+            manager_email="katie.barends@iterable.com",
+            input_fn=lambda _prompt: "n",
+            isatty=True,
+        )
+        self.assertIsNone(declined)
+        self.assertEqual(client.updates, [])
+
     def test_derive_tier_from_permissions(self):
         self.assertEqual(derive_tier_from_permissions(["edit-workbook"]), "Build")
         self.assertEqual(derive_tier_from_permissions(["manage-users", "view-connections"]), "Build")
