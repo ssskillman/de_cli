@@ -121,6 +121,13 @@ class ReportingWorker:
 
 
 @dataclass(frozen=True)
+class ActiveEmployee:
+    email: str
+    full_name: str
+    job_title: str = ""
+
+
+@dataclass(frozen=True)
 class TeamLicenseRecord:
     email: str
     full_name: str
@@ -526,6 +533,70 @@ FROM org
 ORDER BY depth, full_name, email;
 """.strip()
 
+    SQL_ACTIVE_EMPLOYEES = """
+WITH
+emails AS (
+    SELECT
+        WORKER_ID,
+        LOWER(TRIM(EMAIL_URI)) AS email,
+        ROW_NUMBER() OVER (
+            PARTITION BY WORKER_ID
+            ORDER BY COALESCE(NAME_EFFECTIVE_DATE, '1900-01-01') DESC, _FIVETRAN_SYNCED DESC
+        ) AS rn
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.BUSINESS_COMMUNICATION
+    WHERE TYPE = 'email' AND EMAIL_URI IS NOT NULL
+),
+names AS (
+    SELECT
+        WORKER_ID,
+        COALESCE(NULLIF(PREFERRED_NAME_FORMATTED_NAME, ''), LEGAL_NAME_FORMATTED_NAME) AS full_name,
+        ROW_NUMBER() OVER (
+            PARTITION BY WORKER_ID
+            ORDER BY
+                COALESCE(
+                    PREFERRED_NAME_NAME_EFFECTIVE_DATE,
+                    LEGAL_NAME_NAME_EFFECTIVE_DATE,
+                    '1900-01-01'
+                ) DESC,
+                _FIVETRAN_SYNCED DESC
+        ) AS rn
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.PERSON_HISTORY
+),
+titles AS (
+    SELECT
+        WORKER_ID,
+        JOB_TITLE AS job_title,
+        ROW_NUMBER() OVER (
+            PARTITION BY WORKER_ID
+            ORDER BY
+                IFF(COALESCE(PRIMARY_INDICATOR, FALSE), 0, 1),
+                JOB_EFFECTIVE_DATE DESC NULLS LAST,
+                _FIVETRAN_SYNCED DESC
+        ) AS rn
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORK_ASSIGNMENT_HISTORY
+),
+active_workers AS (
+    SELECT
+        e.email,
+        n.full_name,
+        t.job_title
+    FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORKER w
+    JOIN emails e ON e.WORKER_ID = w.ID AND e.rn = 1
+    LEFT JOIN names n ON n.WORKER_ID = w.ID AND n.rn = 1
+    LEFT JOIN titles t ON t.WORKER_ID = w.ID AND t.rn = 1
+    WHERE (w.TERMINATION_DATE IS NULL OR w.TERMINATION_DATE > CURRENT_DATE())
+      AND COALESCE(w._FIVETRAN_DELETED, FALSE) = FALSE
+      AND e.email LIKE '%@%'
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY e.email
+        ORDER BY w.STATUS_EFFECTIVE_DATE DESC NULLS LAST, w._FIVETRAN_SYNCED DESC
+    ) = 1
+)
+SELECT email, COALESCE(full_name, email), COALESCE(job_title, '')
+FROM active_workers
+ORDER BY 2, 1;
+""".strip()
+
     @staticmethod
     def load_cached(cache_file: Path = DEFAULT_CACHE_FILE, max_age_hours: int = 24) -> list[DepartedWorker] | None:
         if not cache_file.is_file():
@@ -636,6 +707,39 @@ ORDER BY depth, full_name, email;
             )
             for row in rows
             if row[0] and int(row[2]) > 0
+        ]
+
+    @classmethod
+    def fetch_active_employees(
+        cls,
+        profiles_path: Path = DEFAULT_DBT_PROFILES,
+    ) -> list[ActiveEmployee]:
+        try:
+            import snowflake.connector
+        except ImportError as exc:
+            raise RuntimeError(
+                "snowflake-connector-python is not installed in the active Python environment. "
+                "Run via UDI environment: ~/UDI/.venv/bin/python scripts/sigma_license_audit.py"
+            ) from exc
+
+        params = cls._resolve_connection_params(profiles_path)
+        try:
+            conn = snowflake.connector.connect(**params)
+            cur = conn.cursor()
+            cur.execute(cls.SQL_ACTIVE_EMPLOYEES)
+            rows = cur.fetchall()
+            conn.close()
+        except Exception as exc:
+            raise RuntimeError(f"Snowflake ADP active employee query failed: {exc}") from exc
+
+        return [
+            ActiveEmployee(
+                email=str(row[0]).strip().lower(),
+                full_name=str(row[1] or row[0]).strip(),
+                job_title=str(row[2] or "").strip(),
+            )
+            for row in rows
+            if row[0]
         ]
 
     @staticmethod
@@ -1128,6 +1232,105 @@ def offer_missing_view_accounts(
         lines.extend(f"  {item}" for item in failures)
     lines.extend(["", "Updated license breakdown", report])
     return "\n".join(lines)
+
+
+def employees_without_sigma_account(
+    employees: list[ActiveEmployee],
+    records: list[MemberAuditRecord],
+) -> list[ActiveEmployee]:
+    licensed = {record.email.casefold() for record in records if record.email}
+    missing = [person for person in employees if person.email.casefold() not in licensed]
+    return sorted(missing, key=lambda person: (person.full_name.casefold(), person.email))
+
+
+def render_unlicensed_employee_list(employees: list[ActiveEmployee]) -> str:
+    table = ascii_table(
+        ["#", "Employee", "Job title", "Email"],
+        [
+            [str(index), person.full_name, person.job_title, person.email]
+            for index, person in enumerate(employees, start=1)
+        ],
+        numeric_columns={0},
+    )
+    return "\n".join(["Current Iterable employees with no Sigma license", table])
+
+
+def offer_view_to_unlicensed_employees(
+    *,
+    employees: list[ActiveEmployee],
+    records: list[MemberAuditRecord],
+    client: SigmaClient,
+    type_to_tier: dict[str, str] | None,
+    input_fn=input,
+    pick_choice=None,
+    pick_multi=None,
+    isatty: bool | None = None,
+) -> list[str]:
+    """Show current employees with no Sigma account, then grant View to all or a selection."""
+    missing = employees_without_sigma_account(employees, records)
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not interactive:
+        return []
+    if not missing:
+        print("Every current Iterable employee has a Sigma account.")
+        return []
+
+    print("\n" + render_unlicensed_employee_list(missing))
+    choose = pick_choice or fzf_pick_choice
+    picker = pick_multi or fzf_pick_multi
+    action = choose(
+        [
+            ("all", f"Grant View to all {len(missing)}"),
+            ("pick", "Choose who gets a View license"),
+            ("back", "Back"),
+        ],
+        prompt="view license > ",
+        header=f"{len(missing)} current employees have no Sigma license",
+    )
+    if action == "all":
+        chosen = missing
+    elif action == "pick":
+        selected = {
+            email.casefold()
+            for email in picker(
+                [
+                    (person.email, f"{person.full_name}  ·  {person.job_title}  <{person.email}>")
+                    for person in missing
+                ],
+                prompt="employee > ",
+                header="Tab toggles · Ctrl-A all · Enter grants View to the selection",
+            )
+        }
+        chosen = [person for person in missing if person.email.casefold() in selected]
+        if not chosen:
+            print("No one selected.")
+            return []
+    else:
+        return []
+
+    answer = input_fn(
+        f"\nCreate {len(chosen)} View account(s) and send invites? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return []
+
+    tiers = account_type_tiers(client, type_to_tier)
+    member_type = resolve_view_account_type(tiers)
+    created: list[str] = []
+    failures: list[str] = []
+    for person in chosen:
+        first_name, last_name = split_person_name(person.full_name)
+        try:
+            client.create_member(person.email, first_name, last_name, member_type)
+            created.append(person.email)
+        except Exception as exc:
+            failures.append(f"{person.email}: {exc}")
+    print(f"Created {len(created)} View account(s).")
+    if failures:
+        print("Failed:")
+        for item in failures:
+            print(f"  {item}")
+    return created
 
 
 def direct_subteam_leads(
@@ -2425,6 +2628,7 @@ def audit_menu_entries(*, departed_active_paid: int, departed_active_free: int) 
     actions = [
         ("batch-deactivate", "Batch deactivate active departed users (dry-run preview)"),
         ("build-report", "Build a report (custom multi-select: Account, License, & Employee type)"),
+        ("grant-view-unlicensed", "Current Iterable employees with no Sigma license"),
         ("search", "Custom search user"),
         ("deactivate-one", "Deactivate one-by-one (interactive step-through or pick user)"),
         ("downgrade-departed", "Downgrade active departed paid users to View (dry-run preview)"),
@@ -2561,6 +2765,33 @@ def interactive_menu(
             input("\nPress Enter to return to menu...")
         elif choice == "build-report":
             interactive_build_report(records)
+        elif choice == "grant-view-unlicensed":
+            try:
+                employees = SnowflakeWorkerStore.fetch_active_employees()
+                created = offer_view_to_unlicensed_employees(
+                    employees=employees,
+                    records=records,
+                    client=client,
+                    type_to_tier=type_to_tier,
+                )
+                if created:
+                    departed_workers = [
+                        DepartedWorker(
+                            email=record.email,
+                            full_name=record.adp_name or record.full_name,
+                            termination_date=record.termination_date,
+                        )
+                        for record in records
+                        if record.is_departed
+                    ]
+                    records = build_audit_records(
+                        client.load_members(),
+                        departed_workers,
+                        account_type_tiers(client, type_to_tier),
+                    )
+            except Exception as exc:
+                print(f"ERROR loading current employees: {exc}", file=sys.stderr)
+            input("\nPress Enter to return to menu...")
         elif choice == "gtm-team":
             try:
                 run_reporting_team_prompt(

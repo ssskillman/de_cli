@@ -689,7 +689,116 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         labels = [label.split(". ", 1)[1] for _key, label in entries[2:-1]]
         self.assertEqual(labels, sorted(labels, key=str.casefold))
         self.assertTrue(labels[0].startswith("Batch deactivate"))
+        self.assertIn("Current Iterable employees with no Sigma license", labels)
         self.assertTrue(labels[-1].startswith("Value Engineering"))
+
+    def test_unlicensed_employees_can_all_get_view_or_a_chosen_subset(self):
+        ActiveEmployee = MODULE.ActiveEmployee
+        employees = [
+            ActiveEmployee("ada@iterable.com", "Lovelace, Ada", "Engineer"),
+            ActiveEmployee("no.sigma@iterable.com", "Barends, Katie Leigh", "VP, Value Engineering"),
+            ActiveEmployee("other.missing@iterable.com", "Skillman, Shawn", "Analyst"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="ada@iterable.com",
+                member_id="m-ada",
+                first_name="Ada",
+                last_name="Lovelace",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            )
+        ]
+
+        class CreatingClient:
+            def __init__(self):
+                self.created = []
+
+            def load_account_types_map(self):
+                return {"View": "View", "Act+": "Act"}
+
+            def create_member(self, email, first_name, last_name, member_type="View"):
+                self.created.append(
+                    {
+                        "email": email,
+                        "firstName": first_name,
+                        "lastName": last_name,
+                        "memberType": member_type,
+                    }
+                )
+                return {}
+
+        missing = MODULE.employees_without_sigma_account(employees, records)
+        self.assertEqual(
+            [person.email for person in missing],
+            ["no.sigma@iterable.com", "other.missing@iterable.com"],
+        )
+
+        listed = io.StringIO()
+        client = CreatingClient()
+        with redirect_stdout(listed):
+            created = MODULE.offer_view_to_unlicensed_employees(
+                employees=employees,
+                records=records,
+                client=client,
+                type_to_tier={"View": "View"},
+                input_fn=lambda _prompt: "n",
+                pick_choice=lambda _entries, **_kwargs: "all",
+                pick_multi=lambda _entries, **_kwargs: [],
+                isatty=True,
+            )
+        self.assertEqual(created, [])
+        self.assertEqual(client.created, [])
+        self.assertIn("Barends, Katie Leigh", listed.getvalue())
+        self.assertIn("VP, Value Engineering", listed.getvalue())
+        self.assertNotIn("Lovelace, Ada", listed.getvalue())
+
+        client = CreatingClient()
+        created = MODULE.offer_view_to_unlicensed_employees(
+            employees=employees,
+            records=records,
+            client=client,
+            type_to_tier={"View": "View"},
+            input_fn=lambda _prompt: "y",
+            pick_choice=lambda _entries, **_kwargs: "all",
+            pick_multi=lambda _entries, **_kwargs: [],
+            isatty=True,
+        )
+        self.assertEqual(
+            created,
+            ["no.sigma@iterable.com", "other.missing@iterable.com"],
+        )
+        self.assertEqual(client.created[0]["firstName"], "Katie Leigh")
+        self.assertEqual(client.created[0]["lastName"], "Barends")
+        self.assertEqual({row["memberType"] for row in client.created}, {"View"})
+
+        client = CreatingClient()
+
+        def pick_multi(entries, **_kwargs):
+            self.assertEqual(
+                [key for key, _label in entries],
+                ["no.sigma@iterable.com", "other.missing@iterable.com"],
+            )
+            return ["other.missing@iterable.com"]
+
+        created = MODULE.offer_view_to_unlicensed_employees(
+            employees=employees,
+            records=records,
+            client=client,
+            type_to_tier={"View": "View"},
+            input_fn=lambda _prompt: "y",
+            pick_choice=lambda _entries, **_kwargs: "pick",
+            pick_multi=pick_multi,
+            isatty=True,
+        )
+        self.assertEqual(created, ["other.missing@iterable.com"])
+        self.assertEqual(client.created[0]["firstName"], "Shawn")
+        self.assertEqual(client.created[0]["lastName"], "Skillman")
 
     def test_subteam_screens_show_the_path_from_the_root_team(self):
         workers, _records = self._subteam_fixture()
