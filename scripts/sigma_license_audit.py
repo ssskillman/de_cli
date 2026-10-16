@@ -270,13 +270,16 @@ class SigmaClient:
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
-                return data["access_token"]
-        except urllib.error.HTTPError as exc:
-            err = exc.read().decode(errors="replace")
-            raise RuntimeError(f"Sigma token mint failed ({exc.code}): {err}") from exc
+        def mint() -> str:
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+                    return data["access_token"]
+            except urllib.error.HTTPError as exc:
+                err = exc.read().decode(errors="replace")
+                raise RuntimeError(f"Sigma token mint failed ({exc.code}): {err}") from exc
+
+        return wait_with_braille("Sigma POST /v2/auth/token", mint)
 
     def request(
         self,
@@ -300,15 +303,19 @@ class SigmaClient:
                 "Content-Type": "application/json",
             },
         )
-        try:
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                payload = resp.read()
-        except urllib.error.HTTPError as exc:
-            err = exc.read().decode(errors="replace")
-            raise RuntimeError(f"{method} {path} failed ({exc.code}): {err}") from exc
-        if not payload:
-            return None
-        return json.loads(payload)
+
+        def send() -> Any:
+            try:
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    payload = resp.read()
+            except urllib.error.HTTPError as exc:
+                err = exc.read().decode(errors="replace")
+                raise RuntimeError(f"{method} {path} failed ({exc.code}): {err}") from exc
+            if not payload:
+                return None
+            return json.loads(payload)
+
+        return wait_with_braille(f"Sigma {method} {path}", send)
 
     def load_account_types_map(self) -> dict[str, str]:
         """Maps accountTypeName -> billed license tier ('Build', 'Analyze', 'Act', 'View')."""
@@ -1547,21 +1554,20 @@ def offer_view_to_unlicensed_employees(
     member_type = resolve_view_account_type(tiers)
     created: list[str] = []
     failures: list[str] = []
-    spinner = BrailleSpinner(
-        f"Creating View account 1/{len(chosen)}: {chosen[0].email}..."
-    )
-    spinner.start()
-    try:
+    def send_invites() -> None:
         for index, person in enumerate(chosen, start=1):
-            spinner.update(f"Creating View account {index}/{len(chosen)}: {person.email}...")
+            braille_status(f"Creating View account {index}/{len(chosen)}: {person.email}")
             first_name, last_name = split_person_name(person.full_name)
             try:
                 client.create_member(person.email, first_name, last_name, member_type)
                 created.append(person.email)
             except Exception as exc:
                 failures.append(f"{person.email}: {exc}")
-    finally:
-        spinner.stop()
+
+    wait_with_braille(
+        f"Creating View account 1/{len(chosen)}: {chosen[0].email}",
+        send_invites,
+    )
     print(f"Created {len(created)} View account(s).")
     if failures:
         print("Failed:")
@@ -2375,6 +2381,16 @@ class BrailleSpinner:
             sys.stderr.flush()
 
 
+_braille_depth = 0
+_braille_lock = threading.Lock()
+_active_spinner: BrailleSpinner | None = None
+
+
+def braille_status(message: str) -> None:
+    if _active_spinner is not None:
+        _active_spinner.update(message)
+
+
 def wait_with_braille(
     message: str,
     operation,
@@ -2382,12 +2398,22 @@ def wait_with_braille(
     spinner_factory=BrailleSpinner,
 ):
     """Run one blocking operation while showing a TTY-only Braille spinner."""
-    spinner = spinner_factory(message)
-    spinner.start()
+    global _braille_depth, _active_spinner
+    with _braille_lock:
+        outer = _braille_depth == 0
+        _braille_depth += 1
+    spinner = spinner_factory(message) if outer else None
+    if spinner is not None:
+        _active_spinner = spinner
+        spinner.start()
     try:
         return operation()
     finally:
-        spinner.stop()
+        if spinner is not None:
+            spinner.stop()
+            _active_spinner = None
+        with _braille_lock:
+            _braille_depth -= 1
 
 
 def fzf_pick_choice(

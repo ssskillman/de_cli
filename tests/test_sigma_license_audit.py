@@ -3,6 +3,7 @@ import io
 import json
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -1777,6 +1778,34 @@ class SigmaLicenseAuditTests(unittest.TestCase):
                 spinner_factory=FakeSpinner,
             )
         self.assertEqual(events, [("init", "Loading..."), ("start",), ("stop",)])
+
+        events.clear()
+        MODULE.wait_with_braille(
+            "outer",
+            lambda: MODULE.wait_with_braille("inner", lambda: None, spinner_factory=FakeSpinner),
+            spinner_factory=FakeSpinner,
+        )
+        self.assertEqual(events, [("init", "outer"), ("start",), ("stop",)])
+
+    def test_sigma_request_shows_braille_while_the_api_call_waits(self):
+        messages = []
+
+        def fake_wait(message, operation, **_kwargs):
+            messages.append(message)
+            return operation()
+
+        client = MODULE.SigmaClient("https://example.test", "token")
+        response = unittest.mock.Mock()
+        response.read.return_value = b'{"ok": true}'
+        response.__enter__ = lambda self: response
+        response.__exit__ = lambda self, *args: False
+        with (
+            unittest.mock.patch.object(MODULE, "wait_with_braille", fake_wait),
+            unittest.mock.patch.object(MODULE.urllib.request, "urlopen", return_value=response),
+        ):
+            payload = client.request("GET", "/v2/members", params={"limit": 1})
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(messages, ["Sigma GET /v2/members"])
 
     def test_fzf_pick_choice_fallback(self):
         from unittest.mock import patch
