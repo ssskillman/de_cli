@@ -722,6 +722,9 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             def load_account_types_map(self):
                 return {"View": "View", "Act+": "Act"}
 
+            def load_members(self):
+                return []
+
             def create_member(self, email, first_name, last_name, member_type="View"):
                 self.created.append(
                     {
@@ -799,6 +802,12 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertEqual(created, ["other.missing@iterable.com"])
         self.assertEqual(client.created[0]["firstName"], "Shawn")
         self.assertEqual(client.created[0]["lastName"], "Skillman")
+
+    def test_active_employee_email_history_does_not_use_fivetran_deleted(self):
+        sql = MODULE.SnowflakeWorkerStore.SQL_ACTIVE_EMPLOYEES
+        history, _, _worker = sql.partition("active_workers AS")
+        self.assertNotIn("_FIVETRAN_DELETED", history)
+        self.assertIn("w._FIVETRAN_DELETED", sql)
 
     def test_former_email_is_excluded_and_same_name_needs_review(self):
         ActiveEmployee = MODULE.ActiveEmployee
@@ -900,6 +909,99 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             isatty=True,
         )
         self.assertEqual(created, ["same.name@iterable.com"])
+
+    def test_grant_view_to_all_does_not_change_existing_accounts(self):
+        ActiveEmployee = MODULE.ActiveEmployee
+        employees = [
+            ActiveEmployee("paid.build@iterable.com", "Builder, Pat", "Engineer"),
+            ActiveEmployee("new.person@iterable.com", "Person, New", "Engineer"),
+            ActiveEmployee("caitlyn.tuel@iterable.com", "Tuel, Caitlyn", "Director, Customer Education"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="caitlyn.vestal@iterable.com",
+                member_id="m-caitlyn",
+                first_name="Caitlyn",
+                last_name="Tuel",
+                member_type="Act+",
+                license_type="Act",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            )
+        ]
+
+        class GuardedClient:
+            def __init__(self, members, fail_reload=False):
+                self.members = members
+                self.fail_reload = fail_reload
+                self.created = []
+                self.updates = []
+                self.deactivated = []
+
+            def load_members(self):
+                if self.fail_reload:
+                    raise RuntimeError("sigma unavailable")
+                return list(self.members)
+
+            def load_account_types_map(self):
+                return {"View": "View", "build": "Build", "Act+": "Act"}
+
+            def create_member(self, email, first_name, last_name, member_type="View"):
+                self.created.append(
+                    {"email": email, "memberType": member_type, "firstName": first_name, "lastName": last_name}
+                )
+                return {}
+
+            def update_member_type(self, member_id, member_type="View"):
+                self.updates.append((member_id, member_type))
+                return {}
+
+            def deactivate_member(self, member_id, new_owner_id=None, archive_docs=False):
+                self.deactivated.append(member_id)
+                return {}
+
+        client = GuardedClient(
+            [
+                {"email": "paid.build@iterable.com", "memberId": "m-paid", "memberType": "build"},
+                {"email": "caitlyn.vestal@iterable.com", "memberId": "m-caitlyn", "memberType": "Act+"},
+            ]
+        )
+        listed = io.StringIO()
+        with redirect_stdout(listed):
+            created = MODULE.offer_view_to_unlicensed_employees(
+                employees=employees,
+                records=records,
+                client=client,
+                type_to_tier={"View": "View", "build": "Build", "Act+": "Act"},
+                input_fn=lambda _prompt: "y",
+                pick_choice=lambda _entries, **_kwargs: "all",
+                pick_multi=lambda _entries, **_kwargs: [],
+                isatty=True,
+            )
+        self.assertEqual(created, ["new.person@iterable.com"])
+        self.assertEqual(client.created[0]["memberType"], "View")
+        self.assertEqual(client.updates, [])
+        self.assertEqual(client.deactivated, [])
+        self.assertIn("paid.build@iterable.com", listed.getvalue())
+        self.assertNotIn("caitlyn.tuel@iterable.com", [row["email"] for row in client.created])
+
+        failed = GuardedClient([], fail_reload=True)
+        created = MODULE.offer_view_to_unlicensed_employees(
+            employees=employees,
+            records=[],
+            client=failed,
+            type_to_tier={"View": "View"},
+            input_fn=lambda _prompt: "y",
+            pick_choice=lambda _entries, **_kwargs: "all",
+            pick_multi=lambda _entries, **_kwargs: [],
+            isatty=True,
+        )
+        self.assertEqual(created, [])
+        self.assertEqual(failed.created, [])
+        self.assertEqual(failed.updates, [])
 
     def test_subteam_screens_show_the_path_from_the_root_team(self):
         workers, _records = self._subteam_fixture()

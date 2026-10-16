@@ -560,7 +560,6 @@ email_history AS (
     SELECT
         WORKER_ID,
         LOWER(TRIM(EMAIL_URI)) AS email,
-        COALESCE(_FIVETRAN_DELETED, FALSE) AS is_deleted,
         COALESCE(NAME_EFFECTIVE_DATE, '1900-01-01') AS effective_date,
         _FIVETRAN_SYNCED AS synced_at
     FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.BUSINESS_COMMUNICATION
@@ -573,7 +572,7 @@ current_email AS (
     FROM email_history
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY WORKER_ID
-        ORDER BY IFF(is_deleted, 1, 0), effective_date DESC, synced_at DESC
+        ORDER BY effective_date DESC, synced_at DESC
     ) = 1
 ),
 prior_emails AS (
@@ -1513,19 +1512,25 @@ def offer_view_to_unlicensed_employees(
     else:
         return []
 
-    if hasattr(client, "load_members"):
+    if not hasattr(client, "load_members"):
+        print("Did not create View accounts because Sigma members could not be reloaded.")
+        return []
+    try:
         fresh = emails_from_members(client.load_members())
-        still_missing = []
-        for person in chosen:
-            already = employee_alias_emails(person) & fresh
-            if already:
-                print(f"Skipped {person.email}; Sigma already has {sorted(already)[0]}.")
-                continue
-            still_missing.append(person)
-        chosen = still_missing
-        if not chosen:
-            print("No one left to invite.")
-            return []
+    except Exception as exc:
+        print(f"Did not create View accounts because Sigma members could not be reloaded: {exc}")
+        return []
+    still_missing = []
+    for person in chosen:
+        already = employee_alias_emails(person) & fresh
+        if already:
+            print(f"Skipped {person.email}; existing Sigma account left unchanged.")
+            continue
+        still_missing.append(person)
+    chosen = still_missing
+    if not chosen:
+        print("No one left to invite.")
+        return []
 
     answer = input_fn(
         f"\nCreate {len(chosen)} View account(s) and send invites? [y/N] "
