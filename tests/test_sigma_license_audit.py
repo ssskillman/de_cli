@@ -800,6 +800,107 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertEqual(client.created[0]["firstName"], "Shawn")
         self.assertEqual(client.created[0]["lastName"], "Skillman")
 
+    def test_former_email_is_excluded_and_same_name_needs_review(self):
+        ActiveEmployee = MODULE.ActiveEmployee
+        employees = [
+            ActiveEmployee(
+                "caitlyn.tuel@iterable.com",
+                "Tuel, Caitlyn",
+                "Director, Customer Education",
+                ("caitlyn.vestal@iterable.com",),
+            ),
+            ActiveEmployee("new.person@iterable.com", "Person, New", "Engineer"),
+            ActiveEmployee("same.name@iterable.com", "Lovelace, Ada", "Engineer"),
+        ]
+        records = [
+            MemberAuditRecord(
+                email="caitlyn.vestal@iterable.com",
+                member_id="m-caitlyn",
+                first_name="Caitlyn",
+                last_name="Vestal",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+            MemberAuditRecord(
+                email="ada@iterable.com",
+                member_id="m-ada",
+                first_name="Ada",
+                last_name="Lovelace",
+                member_type="View",
+                license_type="View",
+                user_kind="internal",
+                sigma_status="active",
+                is_archived=False,
+                is_inactive=False,
+                is_departed=False,
+            ),
+        ]
+        review = MODULE.classify_employees_without_sigma(employees, records)
+        self.assertEqual([person.email for person in review.confirmed_missing], ["new.person@iterable.com"])
+        self.assertEqual(review.former_email_matches[0].employee.email, "caitlyn.tuel@iterable.com")
+        self.assertEqual(review.former_email_matches[0].sigma_email, "caitlyn.vestal@iterable.com")
+        self.assertEqual(review.possible_name_matches[0].employee.email, "same.name@iterable.com")
+        self.assertEqual(review.possible_name_matches[0].sigma_email, "ada@iterable.com")
+
+        class CreatingClient:
+            def __init__(self, members):
+                self.members = members
+                self.created = []
+
+            def load_members(self):
+                return list(self.members)
+
+            def load_account_types_map(self):
+                return {"View": "View"}
+
+            def create_member(self, email, first_name, last_name, member_type="View"):
+                self.created.append(email)
+                return {}
+
+        client = CreatingClient([{"email": "caitlyn.vestal@iterable.com"}, {"email": "ada@iterable.com"}])
+        listed = io.StringIO()
+        with redirect_stdout(listed):
+            created = MODULE.offer_view_to_unlicensed_employees(
+                employees=employees,
+                records=records,
+                client=client,
+                type_to_tier={"View": "View"},
+                input_fn=lambda _prompt: "y",
+                pick_choice=lambda _entries, **_kwargs: "all",
+                pick_multi=lambda _entries, **_kwargs: [],
+                isatty=True,
+            )
+        self.assertEqual(created, ["new.person@iterable.com"])
+        self.assertEqual(client.created, ["new.person@iterable.com"])
+        text = listed.getvalue()
+        self.assertIn("caitlyn.tuel@iterable.com", text)
+        self.assertIn("caitlyn.vestal@iterable.com", text)
+        self.assertIn("same.name@iterable.com", text)
+
+        client = CreatingClient([{"email": "caitlyn.vestal@iterable.com"}, {"email": "ada@iterable.com"}])
+
+        def pick_multi(entries, **_kwargs):
+            self.assertEqual([key for key, _label in entries], ["new.person@iterable.com", "same.name@iterable.com"])
+            self.assertIn("possible name match", entries[1][1])
+            return ["same.name@iterable.com"]
+
+        created = MODULE.offer_view_to_unlicensed_employees(
+            employees=employees,
+            records=records,
+            client=client,
+            type_to_tier={"View": "View"},
+            input_fn=lambda _prompt: "y",
+            pick_choice=lambda _entries, **_kwargs: "pick",
+            pick_multi=pick_multi,
+            isatty=True,
+        )
+        self.assertEqual(created, ["same.name@iterable.com"])
+
     def test_subteam_screens_show_the_path_from_the_root_team(self):
         workers, _records = self._subteam_fixture()
         headers = []

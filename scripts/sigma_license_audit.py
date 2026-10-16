@@ -125,6 +125,27 @@ class ActiveEmployee:
     email: str
     full_name: str
     job_title: str = ""
+    prior_emails: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FormerEmailMatch:
+    employee: ActiveEmployee
+    sigma_email: str
+
+
+@dataclass(frozen=True)
+class PossibleNameMatch:
+    employee: ActiveEmployee
+    sigma_email: str
+    sigma_name: str
+
+
+@dataclass(frozen=True)
+class UnlicensedEmployeeReview:
+    confirmed_missing: list[ActiveEmployee]
+    former_email_matches: list[FormerEmailMatch]
+    possible_name_matches: list[PossibleNameMatch]
 
 
 @dataclass(frozen=True)
@@ -535,16 +556,34 @@ ORDER BY depth, full_name, email;
 
     SQL_ACTIVE_EMPLOYEES = """
 WITH
-emails AS (
+email_history AS (
     SELECT
         WORKER_ID,
         LOWER(TRIM(EMAIL_URI)) AS email,
-        ROW_NUMBER() OVER (
-            PARTITION BY WORKER_ID
-            ORDER BY COALESCE(NAME_EFFECTIVE_DATE, '1900-01-01') DESC, _FIVETRAN_SYNCED DESC
-        ) AS rn
+        COALESCE(_FIVETRAN_DELETED, FALSE) AS is_deleted,
+        COALESCE(NAME_EFFECTIVE_DATE, '1900-01-01') AS effective_date,
+        _FIVETRAN_SYNCED AS synced_at
     FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.BUSINESS_COMMUNICATION
-    WHERE TYPE = 'email' AND EMAIL_URI IS NOT NULL
+    WHERE TYPE = 'email'
+      AND EMAIL_URI IS NOT NULL
+      AND EMAIL_URI LIKE '%@%'
+),
+current_email AS (
+    SELECT WORKER_ID, email
+    FROM email_history
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY WORKER_ID
+        ORDER BY IFF(is_deleted, 1, 0), effective_date DESC, synced_at DESC
+    ) = 1
+),
+prior_emails AS (
+    SELECT
+        h.WORKER_ID,
+        LISTAGG(DISTINCT h.email, '|') WITHIN GROUP (ORDER BY h.email) AS prior_emails
+    FROM email_history h
+    JOIN current_email c ON c.WORKER_ID = h.WORKER_ID
+    WHERE h.email <> c.email
+    GROUP BY h.WORKER_ID
 ),
 names AS (
     SELECT
@@ -577,23 +616,28 @@ titles AS (
 ),
 active_workers AS (
     SELECT
-        e.email,
+        w.ID AS worker_id,
+        c.email,
         n.full_name,
         t.job_title
     FROM FIVETRAN_DB.ADP_WORKFORCE_NOW.WORKER w
-    JOIN emails e ON e.WORKER_ID = w.ID AND e.rn = 1
+    JOIN current_email c ON c.WORKER_ID = w.ID
     LEFT JOIN names n ON n.WORKER_ID = w.ID AND n.rn = 1
     LEFT JOIN titles t ON t.WORKER_ID = w.ID AND t.rn = 1
     WHERE (w.TERMINATION_DATE IS NULL OR w.TERMINATION_DATE > CURRENT_DATE())
       AND COALESCE(w._FIVETRAN_DELETED, FALSE) = FALSE
-      AND e.email LIKE '%@%'
     QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY e.email
+        PARTITION BY c.email
         ORDER BY w.STATUS_EFFECTIVE_DATE DESC NULLS LAST, w._FIVETRAN_SYNCED DESC
     ) = 1
 )
-SELECT email, COALESCE(full_name, email), COALESCE(job_title, '')
-FROM active_workers
+SELECT
+    a.email,
+    COALESCE(a.full_name, a.email),
+    COALESCE(a.job_title, ''),
+    COALESCE(p.prior_emails, '')
+FROM active_workers a
+LEFT JOIN prior_emails p ON p.WORKER_ID = a.worker_id
 ORDER BY 2, 1;
 """.strip()
 
@@ -737,6 +781,7 @@ ORDER BY 2, 1;
                 email=str(row[0]).strip().lower(),
                 full_name=str(row[1] or row[0]).strip(),
                 job_title=str(row[2] or "").strip(),
+                prior_emails=parse_prior_emails(str(row[0]), str(row[3] or "")),
             )
             for row in rows
             if row[0]
@@ -1234,13 +1279,95 @@ def offer_missing_view_accounts(
     return "\n".join(lines)
 
 
+def parse_prior_emails(current: str, raw: str) -> tuple[str, ...]:
+    current_key = current.strip().casefold()
+    seen: list[str] = []
+    for part in raw.split("|"):
+        email = part.strip().lower()
+        if email and "@" in email and email != current_key and email not in seen:
+            seen.append(email)
+    return tuple(seen)
+
+
+def person_name_key(full_name: str) -> tuple[str, str] | None:
+    first, last = split_person_name(full_name)
+    first_token = "".join(char for char in first.split()[0].casefold() if char.isalpha()) if first.split() else ""
+    last_token = "".join(char for char in last.split()[-1].casefold() if char.isalpha()) if last.split() else ""
+    if not first_token or not last_token:
+        return None
+    return first_token, last_token
+
+
+def sigma_name_key(record: MemberAuditRecord) -> tuple[str, str] | None:
+    first_parts = (record.first_name or "").split()
+    last_parts = (record.last_name or "").split()
+    first_token = "".join(char for char in first_parts[0].casefold() if char.isalpha()) if first_parts else ""
+    last_token = "".join(char for char in last_parts[-1].casefold() if char.isalpha()) if last_parts else ""
+    if not first_token or not last_token:
+        return None
+    return first_token, last_token
+
+
+def employee_alias_emails(person: ActiveEmployee) -> set[str]:
+    aliases = {person.email.casefold()}
+    aliases.update(email.casefold() for email in person.prior_emails if email)
+    return aliases
+
+
+def classify_employees_without_sigma(
+    employees: list[ActiveEmployee],
+    records: list[MemberAuditRecord],
+) -> UnlicensedEmployeeReview:
+    """Match current email, then any earlier ADP email, then an exact first+last name."""
+    licensed = {record.email.casefold(): record for record in records if record.email}
+    by_name: dict[tuple[str, str], list[MemberAuditRecord]] = {}
+    for record in licensed.values():
+        key = sigma_name_key(record)
+        if key:
+            by_name.setdefault(key, []).append(record)
+
+    confirmed: list[ActiveEmployee] = []
+    former: list[FormerEmailMatch] = []
+    possible: list[PossibleNameMatch] = []
+    for person in employees:
+        if person.email.casefold() in licensed:
+            continue
+        prior_hit = next(
+            (email for email in person.prior_emails if email.casefold() in licensed),
+            None,
+        )
+        if prior_hit:
+            former.append(FormerEmailMatch(person, licensed[prior_hit.casefold()].email))
+            continue
+        key = person_name_key(person.full_name)
+        matches = by_name.get(key, []) if key else []
+        if len(matches) == 1:
+            match = matches[0]
+            possible.append(PossibleNameMatch(person, match.email, match.full_name))
+        elif len(matches) > 1:
+            possible.append(
+                PossibleNameMatch(
+                    person,
+                    matches[0].email,
+                    f"{len(matches)} Sigma accounts share this name",
+                )
+            )
+        else:
+            confirmed.append(person)
+
+    by_employee = lambda item: (item.full_name.casefold(), item.email)
+    return UnlicensedEmployeeReview(
+        confirmed_missing=sorted(confirmed, key=by_employee),
+        former_email_matches=sorted(former, key=lambda item: by_employee(item.employee)),
+        possible_name_matches=sorted(possible, key=lambda item: by_employee(item.employee)),
+    )
+
+
 def employees_without_sigma_account(
     employees: list[ActiveEmployee],
     records: list[MemberAuditRecord],
 ) -> list[ActiveEmployee]:
-    licensed = {record.email.casefold() for record in records if record.email}
-    missing = [person for person in employees if person.email.casefold() not in licensed]
-    return sorted(missing, key=lambda person: (person.full_name.casefold(), person.email))
+    return classify_employees_without_sigma(employees, records).confirmed_missing
 
 
 def render_unlicensed_employee_list(employees: list[ActiveEmployee]) -> str:
@@ -1252,7 +1379,56 @@ def render_unlicensed_employee_list(employees: list[ActiveEmployee]) -> str:
         ],
         numeric_columns={0},
     )
-    return "\n".join(["Current Iterable employees with no Sigma license", table])
+    return "\n".join(["Confirmed: no current or previous ADP email in Sigma", table])
+
+
+def render_former_email_matches(matches: list[FormerEmailMatch]) -> str:
+    table = ascii_table(
+        ["#", "Employee", "Job title", "Current email", "Sigma email"],
+        [
+            [
+                str(index),
+                match.employee.full_name,
+                match.employee.job_title,
+                match.employee.email,
+                match.sigma_email,
+            ]
+            for index, match in enumerate(matches, start=1)
+        ],
+        numeric_columns={0},
+    )
+    return "\n".join(["Matched through a previous ADP email — already in Sigma, not invited", table])
+
+
+def render_possible_name_matches(matches: list[PossibleNameMatch]) -> str:
+    table = ascii_table(
+        ["#", "Employee", "Job title", "Current email", "Sigma account"],
+        [
+            [
+                str(index),
+                match.employee.full_name,
+                match.employee.job_title,
+                match.employee.email,
+                f"{match.sigma_name} <{match.sigma_email}>",
+            ]
+            for index, match in enumerate(matches, start=1)
+        ],
+        numeric_columns={0},
+    )
+    return "\n".join(["Possible name match — review before inviting", table])
+
+
+def emails_from_members(raw_members: list[Any]) -> set[str]:
+    emails: set[str] = set()
+    for member in raw_members:
+        if isinstance(member, dict):
+            email = str(member.get("email") or "")
+        else:
+            email = str(getattr(member, "email", "") or "")
+        email = email.strip().lower()
+        if email:
+            emails.add(email)
+    return emails
 
 
 def offer_view_to_unlicensed_employees(
@@ -1267,46 +1443,89 @@ def offer_view_to_unlicensed_employees(
     isatty: bool | None = None,
 ) -> list[str]:
     """Show current employees with no Sigma account, then grant View to all or a selection."""
-    missing = employees_without_sigma_account(employees, records)
+    review = classify_employees_without_sigma(employees, records)
     interactive = sys.stdin.isatty() if isatty is None else isatty
     if not interactive:
         return []
-    if not missing:
+    if not review.confirmed_missing and not review.former_email_matches and not review.possible_name_matches:
         print("Every current Iterable employee has a Sigma account.")
         return []
+    if review.former_email_matches:
+        print("\n" + render_former_email_matches(review.former_email_matches))
+    if review.possible_name_matches:
+        print("\n" + render_possible_name_matches(review.possible_name_matches))
+    if review.confirmed_missing:
+        print("\n" + render_unlicensed_employee_list(review.confirmed_missing))
+    if not review.confirmed_missing and not review.possible_name_matches:
+        print("No one left to invite.")
+        return []
 
-    print("\n" + render_unlicensed_employee_list(missing))
     choose = pick_choice or fzf_pick_choice
     picker = pick_multi or fzf_pick_multi
-    action = choose(
+    actions = []
+    if review.confirmed_missing:
+        actions.append(("all", f"Grant View to all {len(review.confirmed_missing)} confirmed"))
+    actions.extend(
         [
-            ("all", f"Grant View to all {len(missing)}"),
             ("pick", "Choose who gets a View license"),
             ("back", "Back"),
-        ],
-        prompt="view license > ",
-        header=f"{len(missing)} current employees have no Sigma license",
+        ]
     )
+    action = choose(
+        actions,
+        prompt="view license > ",
+        header=(
+            f"{len(review.confirmed_missing)} confirmed without a Sigma license"
+            f" · {len(review.former_email_matches)} matched by a previous email"
+            f" · {len(review.possible_name_matches)} possible name matches"
+        ),
+    )
+    selectable = list(review.confirmed_missing) + [match.employee for match in review.possible_name_matches]
+    possible_emails = {match.employee.email.casefold() for match in review.possible_name_matches}
     if action == "all":
-        chosen = missing
+        chosen = list(review.confirmed_missing)
     elif action == "pick":
         selected = {
             email.casefold()
             for email in picker(
                 [
-                    (person.email, f"{person.full_name}  ·  {person.job_title}  <{person.email}>")
-                    for person in missing
+                    (
+                        person.email,
+                        (
+                            f"{person.full_name}  ·  {person.job_title}  <{person.email}>"
+                            + (
+                                "  ·  possible name match"
+                                if person.email.casefold() in possible_emails
+                                else ""
+                            )
+                        ),
+                    )
+                    for person in selectable
                 ],
                 prompt="employee > ",
-                header="Tab toggles · Ctrl-A all · Enter grants View to the selection",
+                header="Tab toggles · Ctrl-A all · confirmed missing, plus possible name matches to review",
             )
         }
-        chosen = [person for person in missing if person.email.casefold() in selected]
+        chosen = [person for person in selectable if person.email.casefold() in selected]
         if not chosen:
             print("No one selected.")
             return []
     else:
         return []
+
+    if hasattr(client, "load_members"):
+        fresh = emails_from_members(client.load_members())
+        still_missing = []
+        for person in chosen:
+            already = employee_alias_emails(person) & fresh
+            if already:
+                print(f"Skipped {person.email}; Sigma already has {sorted(already)[0]}.")
+                continue
+            still_missing.append(person)
+        chosen = still_missing
+        if not chosen:
+            print("No one left to invite.")
+            return []
 
     answer = input_fn(
         f"\nCreate {len(chosen)} View account(s) and send invites? [y/N] "
