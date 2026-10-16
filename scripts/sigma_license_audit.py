@@ -1516,7 +1516,12 @@ def offer_view_to_unlicensed_employees(
         print("Did not create View accounts because Sigma members could not be reloaded.")
         return []
     try:
-        fresh = emails_from_members(client.load_members())
+        fresh = emails_from_members(
+            wait_with_braille(
+                "Checking Sigma for existing accounts...",
+                client.load_members,
+            )
+        )
     except Exception as exc:
         print(f"Did not create View accounts because Sigma members could not be reloaded: {exc}")
         return []
@@ -1542,13 +1547,21 @@ def offer_view_to_unlicensed_employees(
     member_type = resolve_view_account_type(tiers)
     created: list[str] = []
     failures: list[str] = []
-    for person in chosen:
-        first_name, last_name = split_person_name(person.full_name)
-        try:
-            client.create_member(person.email, first_name, last_name, member_type)
-            created.append(person.email)
-        except Exception as exc:
-            failures.append(f"{person.email}: {exc}")
+    spinner = BrailleSpinner(
+        f"Creating View account 1/{len(chosen)}: {chosen[0].email}..."
+    )
+    spinner.start()
+    try:
+        for index, person in enumerate(chosen, start=1):
+            spinner.update(f"Creating View account {index}/{len(chosen)}: {person.email}...")
+            first_name, last_name = split_person_name(person.full_name)
+            try:
+                client.create_member(person.email, first_name, last_name, member_type)
+                created.append(person.email)
+            except Exception as exc:
+                failures.append(f"{person.email}: {exc}")
+    finally:
+        spinner.stop()
     print(f"Created {len(created)} View account(s).")
     if failures:
         print("Failed:")
@@ -2002,7 +2015,10 @@ def run_reporting_team_prompt(
     manager_email: str,
     type_to_tier: dict[str, str] | None = None,
 ) -> None:
-    workers = SnowflakeWorkerStore.fetch_reporting_tree(manager_email)
+    workers = wait_with_braille(
+        f"Loading {label} reporting tree from ADP...",
+        lambda: SnowflakeWorkerStore.fetch_reporting_tree(manager_email),
+    )
     rows = build_team_license_rows(workers, records)
     print(
         render_team_license_report(
@@ -2357,6 +2373,21 @@ class BrailleSpinner:
         if sys.stderr.isatty():
             sys.stderr.write("\r\033[K\033[?25h")
             sys.stderr.flush()
+
+
+def wait_with_braille(
+    message: str,
+    operation,
+    *,
+    spinner_factory=BrailleSpinner,
+):
+    """Run one blocking operation while showing a TTY-only Braille spinner."""
+    spinner = spinner_factory(message)
+    spinner.start()
+    try:
+        return operation()
+    finally:
+        spinner.stop()
 
 
 def fzf_pick_choice(
@@ -2991,7 +3022,10 @@ def interactive_menu(
             interactive_build_report(records)
         elif choice == "grant-view-unlicensed":
             try:
-                employees = SnowflakeWorkerStore.fetch_active_employees()
+                employees = wait_with_braille(
+                    "Loading current Iterable employees from ADP...",
+                    SnowflakeWorkerStore.fetch_active_employees,
+                )
                 created = offer_view_to_unlicensed_employees(
                     employees=employees,
                     records=records,
@@ -3009,7 +3043,10 @@ def interactive_menu(
                         if record.is_departed
                     ]
                     records = build_audit_records(
-                        client.load_members(),
+                        wait_with_braille(
+                            "Refreshing Sigma members...",
+                            client.load_members,
+                        ),
                         departed_workers,
                         account_type_tiers(client, type_to_tier),
                     )
@@ -3046,8 +3083,14 @@ def main() -> int:
 
     # Fetch account types and members from Sigma
     try:
-        type_to_tier = sigma_client.load_account_types_map()
-        raw_members = sigma_client.load_members()
+        type_to_tier = wait_with_braille(
+            "Loading Sigma account types...",
+            sigma_client.load_account_types_map,
+        )
+        raw_members = wait_with_braille(
+            "Loading Sigma members...",
+            sigma_client.load_members,
+        )
     except Exception as exc:
         print(f"ERROR querying Sigma API: {exc}", file=sys.stderr)
         return 1
@@ -3075,7 +3118,10 @@ def main() -> int:
 
     # Fetch departed employees from Snowflake ADP
     try:
-        departed_workers = SnowflakeWorkerStore.fetch_from_snowflake(force_refresh=args.refresh)
+        departed_workers = wait_with_braille(
+            "Loading departed employees from ADP...",
+            lambda: SnowflakeWorkerStore.fetch_from_snowflake(force_refresh=args.refresh),
+        )
     except Exception as exc:
         print(f"ERROR querying Snowflake ADP: {exc}", file=sys.stderr)
         return 1

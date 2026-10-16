@@ -1748,6 +1748,36 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         spinner.stop()
         self.assertIsNone(spinner._thread)
 
+    def test_wait_with_braille_stops_after_success_and_failure(self):
+        events = []
+
+        class FakeSpinner:
+            def __init__(self, message):
+                events.append(("init", message))
+
+            def start(self):
+                events.append(("start",))
+
+            def stop(self):
+                events.append(("stop",))
+
+        result = MODULE.wait_with_braille(
+            "Loading...",
+            lambda: "done",
+            spinner_factory=FakeSpinner,
+        )
+        self.assertEqual(result, "done")
+        self.assertEqual(events, [("init", "Loading..."), ("start",), ("stop",)])
+
+        events.clear()
+        with self.assertRaisesRegex(RuntimeError, "failed"):
+            MODULE.wait_with_braille(
+                "Loading...",
+                lambda: (_ for _ in ()).throw(RuntimeError("failed")),
+                spinner_factory=FakeSpinner,
+            )
+        self.assertEqual(events, [("init", "Loading..."), ("start",), ("stop",)])
+
     def test_fzf_pick_choice_fallback(self):
         from unittest.mock import patch
         entries = [("1", "1. Option One"), ("10", "10. Option Ten"), ("q", "q. Quit")]
