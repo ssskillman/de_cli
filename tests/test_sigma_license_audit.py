@@ -545,7 +545,14 @@ class SigmaLicenseAuditTests(unittest.TestCase):
                 "teri.hatfield@iterable.com",
                 job_title="VP, Value Engineering",
             ),
-            ReportingWorker("ada@iterable.com", "Lovelace, Ada", 2, "katie.barends@iterable.com"),
+            ReportingWorker(
+                "ada@iterable.com",
+                "Lovelace, Ada",
+                2,
+                "katie.barends@iterable.com",
+                job_title="Engineer",
+            ),
+            ReportingWorker("dee@iterable.com", "Third, Dee", 3, "ada@iterable.com"),
             ReportingWorker(
                 "seth.charles@iterable.com",
                 "Charles, Seth",
@@ -566,7 +573,7 @@ class SigmaLicenseAuditTests(unittest.TestCase):
 
         def input_fn(prompt):
             prompts.append(prompt)
-            if "Select teams" in prompt:
+            if "first and second line" in prompt:
                 return "y"
             if "detailed user list" in prompt:
                 return "y"
@@ -589,16 +596,59 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertEqual(
             [label for _email, label in seen[0]],
             [
-                "Barends, Katie Leigh  ·  VP, Value Engineering",
-                "Charles, Seth  ·  Director, Sales",
+                "1  Barends, Katie Leigh  ·  VP, Value Engineering",
+                "1  Charles, Seth  ·  Director, Sales",
+                "2  Lovelace, Ada  ·  Engineer",
+                "2  Sales, Sam",
             ],
         )
         self.assertIn("License breakdown", text)
-        self.assertIn("Lovelace, Ada", text)
-        self.assertIn("Sales, Sam", text)
+        employees = text.split("Employees", 1)[-1]
+        self.assertIn("Barends, Katie Leigh", employees)
+        self.assertIn("Charles, Seth", employees)
+        self.assertIn("Lovelace, Ada", employees)
+        self.assertIn("Sales, Sam", employees)
+        self.assertIn("Third, Dee", employees)
         self.assertNotIn("Outside, Olivia", text)
-        self.assertNotIn("Barends, Katie Leigh", text.split("Employees", 1)[-1])
         self.assertTrue(any("detailed user list" in prompt for prompt in prompts))
+
+    def test_second_line_selection_includes_that_person_and_not_their_boss(self):
+        workers = [
+            ReportingWorker(
+                "katie.barends@iterable.com",
+                "Barends, Katie Leigh",
+                1,
+                "teri.hatfield@iterable.com",
+                job_title="VP, Value Engineering",
+            ),
+            ReportingWorker(
+                "ada@iterable.com",
+                "Lovelace, Ada",
+                2,
+                "katie.barends@iterable.com",
+                job_title="Engineer",
+            ),
+            ReportingWorker("dee@iterable.com", "Third, Dee", 3, "ada@iterable.com"),
+        ]
+
+        def input_fn(prompt):
+            return "y" if "first and second line" in prompt or "detailed user list" in prompt else "n"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            MODULE.present_selected_reporting_teams(
+                workers=workers,
+                records=[],
+                manager_email="teri.hatfield@iterable.com",
+                manager_label="GTM Team (Teri Hatfield)",
+                input_fn=input_fn,
+                pick_multi=lambda _entries, **_kwargs: ["ada@iterable.com"],
+                isatty=True,
+            )
+        employees = output.getvalue().split("Employees", 1)[-1]
+        self.assertIn("Lovelace, Ada", employees)
+        self.assertIn("Third, Dee", employees)
+        self.assertNotIn("Barends, Katie Leigh", employees)
 
     def test_skipping_gtm_team_selection_leaves_the_full_list_prompt(self):
         workers, _records = self._subteam_fixture()

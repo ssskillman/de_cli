@@ -1623,14 +1623,77 @@ def reporting_team_choice_label(worker: ReportingWorker) -> str:
     return worker.full_name
 
 
+def reporting_line_choices(
+    workers: list[ReportingWorker],
+    manager_email: str,
+    *,
+    lines: int = 2,
+) -> list[tuple[int, ReportingWorker]]:
+    """People on the first and second lines under a manager."""
+    children: dict[str, list[ReportingWorker]] = {}
+    for worker in workers:
+        children.setdefault(worker.manager_email.casefold(), []).append(worker)
+    found: list[tuple[int, ReportingWorker]] = []
+
+    def walk(email: str, line: int) -> None:
+        if line > lines:
+            return
+        group = children.get(email, [])
+        group.sort(key=lambda worker: (worker.full_name.casefold(), worker.email))
+        for child in group:
+            found.append((line, child))
+            walk(child.email.casefold(), line + 1)
+
+    walk(manager_email.casefold(), 1)
+    return sorted(found, key=lambda item: (item[0], item[1].full_name.casefold(), item[1].email))
+
+
+def _selected_team_roots(
+    workers: list[ReportingWorker],
+    chosen: list[ReportingWorker],
+) -> list[ReportingWorker]:
+    parent = {worker.email.casefold(): worker.manager_email.casefold() for worker in workers}
+    chosen_emails = {worker.email.casefold() for worker in chosen}
+
+    def reports_to_selected(email: str) -> bool:
+        current = parent.get(email, "")
+        while current:
+            if current in chosen_emails:
+                return True
+            current = parent.get(current, "")
+        return False
+
+    return [worker for worker in chosen if not reports_to_selected(worker.email.casefold())]
+
+
 def combine_selected_subtrees(
     workers: list[ReportingWorker],
     leads: list[ReportingWorker],
 ) -> list[ReportingWorker]:
+    """Selected people plus everyone below them, without counting anyone twice."""
     combined: list[ReportingWorker] = []
     seen: set[str] = set()
-    for lead in leads:
-        for person in rebase_subtree(workers, lead.email):
+    for lead in _selected_team_roots(workers, leads):
+        group = [
+            ReportingWorker(
+                email=lead.email,
+                full_name=lead.full_name,
+                depth=1,
+                manager_email=lead.manager_email,
+                job_title=lead.job_title,
+            ),
+            *[
+                ReportingWorker(
+                    email=person.email,
+                    full_name=person.full_name,
+                    depth=person.depth + 1,
+                    manager_email=person.manager_email,
+                    job_title=person.job_title,
+                )
+                for person in rebase_subtree(workers, lead.email)
+            ],
+        ]
+        for person in group:
             key = person.email.casefold()
             if key in seen:
                 continue
@@ -1649,13 +1712,13 @@ def present_selected_reporting_teams(
     pick_multi=None,
     isatty: bool | None = None,
 ) -> bool:
-    """Multi-select direct teams, then show their license summary and detail prompt."""
-    leads = direct_subteam_leads(workers, manager_email)
+    """Multi-select the first two lines, then show their license summary and detail prompt."""
+    choices = reporting_line_choices(workers, manager_email)
     interactive = sys.stdin.isatty() if isatty is None else isatty
-    if not leads or not interactive:
+    if not choices or not interactive:
         return False
     answer = input_fn(
-        f"\nSelect teams reporting to {manager_label}? [y/N] "
+        f"\nSelect the first and second line under {manager_label}? [y/N] "
     ).strip().lower()
     if answer not in {"y", "yes"}:
         return False
@@ -1663,12 +1726,15 @@ def present_selected_reporting_teams(
     selected = {
         email.casefold()
         for email in picker(
-            [(lead.email, reporting_team_choice_label(lead)) for lead in leads],
-            prompt="team > ",
-            header=f"{manager_label} · Tab toggles · Enter shows the selected teams",
+            [
+                (worker.email, f"{line}  {reporting_team_choice_label(worker)}")
+                for line, worker in choices
+            ],
+            prompt="person > ",
+            header=f"{manager_label} · 1 = first line · 2 = second line · Tab toggles · Enter shows the selection",
         )
     }
-    chosen = [lead for lead in leads if lead.email.casefold() in selected]
+    chosen = [worker for _line, worker in choices if worker.email.casefold() in selected]
     if not chosen:
         return False
     selected_workers = combine_selected_subtrees(workers, chosen)
