@@ -1623,29 +1623,28 @@ def reporting_team_choice_label(worker: ReportingWorker) -> str:
     return worker.full_name
 
 
-def reporting_line_choices(
+def reporting_org_people(
     workers: list[ReportingWorker],
     manager_email: str,
-    *,
-    lines: int = 2,
-) -> list[tuple[int, ReportingWorker]]:
-    """People on the first and second lines under a manager."""
+) -> list[ReportingWorker]:
+    """Everyone reachable through the reporting tree below a manager."""
     children: dict[str, list[ReportingWorker]] = {}
     for worker in workers:
         children.setdefault(worker.manager_email.casefold(), []).append(worker)
-    found: list[tuple[int, ReportingWorker]] = []
+    found: list[ReportingWorker] = []
 
-    def walk(email: str, line: int) -> None:
-        if line > lines:
-            return
+    def walk(email: str) -> None:
         group = children.get(email, [])
         group.sort(key=lambda worker: (worker.full_name.casefold(), worker.email))
         for child in group:
-            found.append((line, child))
-            walk(child.email.casefold(), line + 1)
+            found.append(child)
+            walk(child.email.casefold())
 
-    walk(manager_email.casefold(), 1)
-    return sorted(found, key=lambda item: (item[0], item[1].full_name.casefold(), item[1].email))
+    walk(manager_email.casefold())
+    return sorted(
+        found,
+        key=lambda worker: (worker.depth, worker.full_name.casefold(), worker.email),
+    )
 
 
 def _selected_team_roots(
@@ -1702,6 +1701,21 @@ def combine_selected_subtrees(
     return combined
 
 
+def exclude_selected_subtrees(
+    workers: list[ReportingWorker],
+    selected: list[ReportingWorker],
+) -> list[ReportingWorker]:
+    excluded = {
+        person.email.casefold()
+        for root in selected
+        for person in [
+            root,
+            *rebase_subtree(workers, root.email),
+        ]
+    }
+    return [worker for worker in workers if worker.email.casefold() not in excluded]
+
+
 def present_selected_reporting_teams(
     *,
     workers: list[ReportingWorker],
@@ -1709,41 +1723,64 @@ def present_selected_reporting_teams(
     manager_email: str,
     manager_label: str,
     input_fn=input,
+    pick_choice=None,
     pick_multi=None,
     isatty: bool | None = None,
 ) -> bool:
-    """Multi-select the first two lines, then show their license summary and detail prompt."""
-    choices = reporting_line_choices(workers, manager_email)
+    """Build a reporting slice by including or excluding selected people and their trees."""
+    people = reporting_org_people(workers, manager_email)
     interactive = sys.stdin.isatty() if isatty is None else isatty
-    if not choices or not interactive:
+    if not people or not interactive:
         return False
-    answer = input_fn(
-        f"\nSelect the first and second line under {manager_label}? [y/N] "
-    ).strip().lower()
-    if answer not in {"y", "yes"}:
+    choose = pick_choice or fzf_pick_choice
+    mode = choose(
+        [
+            ("include", "Include selected people and their reporting trees"),
+            ("exclude", "Start with everyone; remove selected people and their trees"),
+            ("back", "Keep the full organization"),
+        ],
+        prompt="team builder > ",
+        header=f"{manager_label} · choose how to build the report",
+    )
+    if mode not in {"include", "exclude"}:
         return False
     picker = pick_multi or fzf_pick_multi
     selected = {
         email.casefold()
         for email in picker(
             [
-                (worker.email, f"{line}  {reporting_team_choice_label(worker)}")
-                for line, worker in choices
+                (
+                    worker.email,
+                    f"{reporting_team_choice_label(worker)}"
+                    f"  ·  line {worker.depth}"
+                    f"  ·  tree {len(rebase_subtree(workers, worker.email)) + 1}",
+                )
+                for worker in people
             ],
             prompt="person > ",
-            header=f"{manager_label} · 1 = first line · 2 = second line · Tab toggles · Enter shows the selection",
+            header=(
+                f"{manager_label} · type a name · Tab adds and clears search · "
+                "selected people stay marked · Enter confirms"
+            ),
+            clear_query_on_toggle=True,
         )
     }
-    chosen = [worker for _line, worker in choices if worker.email.casefold() in selected]
+    chosen = [worker for worker in people if worker.email.casefold() in selected]
     if not chosen:
         return False
-    selected_workers = combine_selected_subtrees(workers, chosen)
+    if mode == "include":
+        selected_workers = combine_selected_subtrees(workers, chosen)
+        selection_text = f"Included {len(chosen)} people and their reporting trees"
+    else:
+        selected_workers = exclude_selected_subtrees(people, chosen)
+        selection_text = f"Excluded {len(chosen)} person{'s' if len(chosen) != 1 else ''} and their reporting tree{'s' if len(chosen) != 1 else ''}"
     names = ", ".join(lead.full_name for lead in chosen)
     rows = build_team_license_rows(selected_workers, records)
     print(
         "\n"
+        + f"{selection_text}: {names}\n\n"
         + render_team_license_report(
-            f"{manager_label} > {names}",
+            f"{manager_label} > {mode.title()} selection",
             rows,
             manager_email=manager_email,
             include_employees=False,
@@ -2619,17 +2656,21 @@ def fzf_pick_multi(
     prompt: str = "select > ",
     header: str = "",
     height: str = "45%",
+    clear_query_on_toggle: bool = False,
 ) -> list[str]:
     if not entries:
         return []
     if shutil.which("fzf") and sys.stdin.isatty():
         lines = [f"{key}\t{label}" for key, label in entries]
+        toggle_binding = (
+            "tab:toggle+clear-query," if clear_query_on_toggle else ""
+        )
         cmd = [
             "fzf",
             "--ansi",
             "--no-mouse",
             "--multi",
-            "--bind=ctrl-a:select-all,ctrl-d:deselect-all",
+            f"--bind={toggle_binding}ctrl-a:select-all,ctrl-d:deselect-all",
             f"--height={height}",
             "--reverse",
             "--border=rounded",
@@ -2640,7 +2681,12 @@ def fzf_pick_multi(
             "--pointer=▶",
             "--marker=◉ ",
             f"--header={header}",
-            "--footer=Tab=toggle · Ctrl-A=all · Enter=confirm · Esc=cancel",
+            (
+                "--footer=Type=filter · Tab=add and clear search · "
+                "Ctrl-A=all · Enter=confirm · Esc=cancel"
+                if clear_query_on_toggle
+                else "--footer=Tab=toggle · Ctrl-A=all · Enter=confirm · Esc=cancel"
+            ),
         ]
         proc = subprocess.run(
             cmd,
