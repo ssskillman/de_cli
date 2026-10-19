@@ -536,6 +536,87 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         }
         self.assertEqual(table_rows["Barends, Katie Leigh"], ["2", "0", "0", "0", "1", "1"])
 
+    def test_gtm_team_multi_select_reprints_the_summary_then_asks_for_details(self):
+        workers = [
+            ReportingWorker(
+                "katie.barends@iterable.com",
+                "Barends, Katie Leigh",
+                1,
+                "teri.hatfield@iterable.com",
+                job_title="VP, Value Engineering",
+            ),
+            ReportingWorker("ada@iterable.com", "Lovelace, Ada", 2, "katie.barends@iterable.com"),
+            ReportingWorker(
+                "seth.charles@iterable.com",
+                "Charles, Seth",
+                1,
+                "teri.hatfield@iterable.com",
+                job_title="Director, Sales",
+            ),
+            ReportingWorker("sam@iterable.com", "Sales, Sam", 2, "seth.charles@iterable.com"),
+            ReportingWorker("outsider@iterable.com", "Outside, Olivia", 1, "someone.else@iterable.com"),
+        ]
+        seen = []
+
+        def pick_multi(entries, **_kwargs):
+            seen.append(entries)
+            return ["katie.barends@iterable.com", "seth.charles@iterable.com"]
+
+        prompts = []
+
+        def input_fn(prompt):
+            prompts.append(prompt)
+            if "Select teams" in prompt:
+                return "y"
+            if "detailed user list" in prompt:
+                return "y"
+            return "n"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            presented = MODULE.present_selected_reporting_teams(
+                workers=workers,
+                records=[],
+                manager_email="teri.hatfield@iterable.com",
+                manager_label="GTM Team (Teri Hatfield)",
+                input_fn=input_fn,
+                pick_multi=pick_multi,
+                isatty=True,
+            )
+
+        text = output.getvalue()
+        self.assertTrue(presented)
+        self.assertEqual(
+            [label for _email, label in seen[0]],
+            [
+                "Barends, Katie Leigh  ·  VP, Value Engineering",
+                "Charles, Seth  ·  Director, Sales",
+            ],
+        )
+        self.assertIn("License breakdown", text)
+        self.assertIn("Lovelace, Ada", text)
+        self.assertIn("Sales, Sam", text)
+        self.assertNotIn("Outside, Olivia", text)
+        self.assertNotIn("Barends, Katie Leigh", text.split("Employees", 1)[-1])
+        self.assertTrue(any("detailed user list" in prompt for prompt in prompts))
+
+    def test_skipping_gtm_team_selection_leaves_the_full_list_prompt(self):
+        workers, _records = self._subteam_fixture()
+
+        def pick_multi(_entries, **_kwargs):
+            raise AssertionError("picker should not open when the option is declined")
+
+        presented = MODULE.present_selected_reporting_teams(
+            workers=workers,
+            records=[],
+            manager_email="teri.hatfield@iterable.com",
+            manager_label="GTM Team (Teri Hatfield)",
+            input_fn=lambda _prompt: "n",
+            pick_multi=pick_multi,
+            isatty=True,
+        )
+        self.assertFalse(presented)
+
     def test_subteam_fzf_upgrades_only_the_selected_view_member(self):
         workers, records = self._subteam_fixture()
 

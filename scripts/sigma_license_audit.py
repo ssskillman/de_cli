@@ -1617,6 +1617,78 @@ def rebase_subtree(workers: list[ReportingWorker], lead_email: str) -> list[Repo
     return subtree
 
 
+def reporting_team_choice_label(worker: ReportingWorker) -> str:
+    if worker.job_title.strip():
+        return f"{worker.full_name}  ·  {worker.job_title.strip()}"
+    return worker.full_name
+
+
+def combine_selected_subtrees(
+    workers: list[ReportingWorker],
+    leads: list[ReportingWorker],
+) -> list[ReportingWorker]:
+    combined: list[ReportingWorker] = []
+    seen: set[str] = set()
+    for lead in leads:
+        for person in rebase_subtree(workers, lead.email):
+            key = person.email.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            combined.append(person)
+    return combined
+
+
+def present_selected_reporting_teams(
+    *,
+    workers: list[ReportingWorker],
+    records: list[MemberAuditRecord],
+    manager_email: str,
+    manager_label: str,
+    input_fn=input,
+    pick_multi=None,
+    isatty: bool | None = None,
+) -> bool:
+    """Multi-select direct teams, then show their license summary and detail prompt."""
+    leads = direct_subteam_leads(workers, manager_email)
+    interactive = sys.stdin.isatty() if isatty is None else isatty
+    if not leads or not interactive:
+        return False
+    answer = input_fn(
+        f"\nSelect teams reporting to {manager_label}? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        return False
+    picker = pick_multi or fzf_pick_multi
+    selected = {
+        email.casefold()
+        for email in picker(
+            [(lead.email, reporting_team_choice_label(lead)) for lead in leads],
+            prompt="team > ",
+            header=f"{manager_label} · Tab toggles · Enter shows the selected teams",
+        )
+    }
+    chosen = [lead for lead in leads if lead.email.casefold() in selected]
+    if not chosen:
+        return False
+    selected_workers = combine_selected_subtrees(workers, chosen)
+    names = ", ".join(lead.full_name for lead in chosen)
+    rows = build_team_license_rows(selected_workers, records)
+    print(
+        "\n"
+        + render_team_license_report(
+            f"{manager_label} > {names}",
+            rows,
+            manager_email=manager_email,
+            include_employees=False,
+        )
+    )
+    listed = offer_show_employee_list(rows, input_fn=input_fn, isatty=interactive)
+    if listed:
+        print("\n" + listed)
+    return True
+
+
 def render_subteam_summary(
     workers: list[ReportingWorker],
     records: list[MemberAuditRecord],
@@ -2034,9 +2106,18 @@ def run_reporting_team_prompt(
             include_employees=False,
         )
     )
-    listed = offer_show_employee_list(rows)
-    if listed:
-        print("\n" + listed)
+    showed_selection = False
+    if manager_email.casefold() == GTM_MANAGER_EMAIL.casefold():
+        showed_selection = present_selected_reporting_teams(
+            workers=workers,
+            records=records,
+            manager_email=manager_email,
+            manager_label=label,
+        )
+    if not showed_selection:
+        listed = offer_show_employee_list(rows)
+        if listed:
+            print("\n" + listed)
     updated = offer_missing_view_accounts(
         workers=workers,
         records=records,
