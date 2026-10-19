@@ -536,6 +536,109 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         }
         self.assertEqual(table_rows["Barends, Katie Leigh"], ["2", "0", "0", "0", "1", "1"])
 
+    def test_reporting_level_choices_align_name_title_and_tree(self):
+        workers = [
+            ReportingWorker(
+                "katie.barends@iterable.com",
+                "Barends, Katie Leigh",
+                1,
+                "teri.hatfield@iterable.com",
+                job_title="VP, Value Engineering",
+            ),
+            ReportingWorker(
+                "ada@iterable.com",
+                "Lovelace, Ada",
+                2,
+                "katie.barends@iterable.com",
+                job_title="Engineer",
+            ),
+            ReportingWorker(
+                "amy.rouas@iterable.com",
+                "Rouas, Amy",
+                1,
+                "teri.hatfield@iterable.com",
+                job_title="Chief of Staff, Revenue",
+            ),
+        ]
+        directs = MODULE.manager_direct_reports(workers, "teri.hatfield@iterable.com")
+        labels = [
+            label
+            for _email, label in MODULE.reporting_level_choices(
+                directs,
+                workers,
+                {"katie.barends@iterable.com"},
+            )
+        ]
+        self.assertEqual({label.index("  ·  tree ") for label in labels}, {len(labels[0].split("  ·  tree ")[0])})
+        self.assertEqual({label.index("  ·  included ") for label in labels}, {labels[0].index("  ·  included ")})
+        self.assertEqual({label.index("  ·  excluded ") for label in labels}, {labels[0].index("  ·  excluded ")})
+        katie = next(label for label in labels if label.startswith("Barends"))
+        amy = next(label for label in labels if label.startswith("Rouas"))
+        self.assertIn("tree 2", katie)
+        self.assertIn("included 1", katie)
+        self.assertIn("excluded 1", katie)
+        self.assertIn("tree 1", amy)
+        self.assertIn("included 0", amy)
+        self.assertIn("excluded 1", amy)
+        self.assertIn("→", katie)
+        self.assertNotIn("→", amy)
+
+    def test_parent_row_shows_an_excluded_child_tree_in_both_counts(self):
+        workers = [
+            ReportingWorker(
+                "zane.murfitt@iterable.com",
+                "Murfitt, Zane Robert",
+                1,
+                "teri.hatfield@iterable.com",
+                job_title="Senior Vice President, Customer Success",
+            ),
+            ReportingWorker(
+                "neil.smith@iterable.com",
+                "Smith, Neil",
+                2,
+                "zane.murfitt@iterable.com",
+                job_title="Vice President, Technical Support",
+            ),
+            ReportingWorker(
+                "neil.report@iterable.com",
+                "Report, Neil",
+                3,
+                "neil.smith@iterable.com",
+            ),
+            ReportingWorker(
+                "seth.charles@iterable.com",
+                "Charles, Seth",
+                2,
+                "zane.murfitt@iterable.com",
+                job_title="Vice President, Delivery Operations",
+            ),
+        ]
+        included = {
+            worker.email.casefold()
+            for worker in workers
+            if worker.email != "neil.smith@iterable.com" and worker.email != "neil.report@iterable.com"
+        }
+        zane_label = dict(
+            MODULE.reporting_level_choices(
+                MODULE.manager_direct_reports(workers, "teri.hatfield@iterable.com"),
+                workers,
+                included,
+            )
+        )["zane.murfitt@iterable.com"]
+        neil_label = dict(
+            MODULE.reporting_level_choices(
+                MODULE.manager_direct_reports(workers, "zane.murfitt@iterable.com"),
+                workers,
+                included,
+            )
+        )["neil.smith@iterable.com"]
+        self.assertIn("tree 4", zane_label)
+        self.assertIn("included 2", zane_label)
+        self.assertIn("excluded 2", zane_label)
+        self.assertIn("tree 2", neil_label)
+        self.assertIn("included 0", neil_label)
+        self.assertIn("excluded 2", neil_label)
+
     def test_gtm_tree_starts_at_directs_and_refreshes_after_each_exclusion(self):
         workers = [
             ReportingWorker(
@@ -602,6 +705,10 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIn("their directs", seen[0][0])
         self.assertEqual(seen[2][1], ["sam@iterable.com"])
         self.assertGreaterEqual(text.count("License breakdown"), 2)
+        self.assertIn(
+            "Excluded: Barends, Katie Leigh · Sales, Sam\nIncluded:",
+            text,
+        )
         employees = text.split("Employees", 1)[-1]
         self.assertIn("Charles, Seth", employees)
         self.assertNotIn("Sales, Sam", employees)
@@ -646,7 +753,12 @@ class SigmaLicenseAuditTests(unittest.TestCase):
                 pick_level=lambda _entries, **_kwargs: next(actions),
                 isatty=True,
             )
-        employees = output.getvalue().split("Employees", 1)[-1]
+        text = output.getvalue()
+        self.assertIn(
+            "Excluded: Barends, Katie Leigh\nIncluded: Lovelace, Ada",
+            text,
+        )
+        employees = text.split("Employees", 1)[-1]
         self.assertIn("Lovelace, Ada", employees)
         self.assertIn("Third, Dee", employees)
         self.assertNotIn("Barends, Katie Leigh", employees)

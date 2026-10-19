@@ -1669,19 +1669,50 @@ def reporting_tree_emails(
     }
 
 
-def reporting_level_choice_label(
-    worker: ReportingWorker,
+def reporting_level_choices(
+    directs: list[ReportingWorker],
     workers: list[ReportingWorker],
     included: set[str],
-) -> str:
-    state = "included" if worker.email.casefold() in included else "excluded"
-    tree_size = len(reporting_tree_emails(workers, worker.email))
-    has_directs = bool(manager_direct_reports(workers, worker.email))
-    arrow = "  →" if has_directs else ""
-    return (
-        f"{reporting_team_choice_label(worker)}"
-        f"  ·  tree {tree_size}  ·  {state}{arrow}"
+) -> list[tuple[str, str]]:
+    """Name, title, and how many people in each tree are included or excluded."""
+    specs = []
+    for worker in directs:
+        tree = reporting_tree_emails(workers, worker.email)
+        included_count = sum(1 for email in tree if email in included)
+        specs.append(
+            (
+                worker.email,
+                worker.full_name,
+                worker.job_title.strip(),
+                len(tree),
+                included_count,
+                len(tree) - included_count,
+                "→" if manager_direct_reports(workers, worker.email) else "",
+            )
+        )
+    if not specs:
+        return []
+    name_width = max(len(name) for _email, name, *_rest in specs)
+    title_width = max(len(title) for _email, _name, title, *_rest in specs)
+    tree_width = max(len(str(tree)) for _email, _name, _title, tree, *_rest in specs)
+    included_width = max(len(str(count)) for _email, _name, _title, _tree, count, *_rest in specs)
+    excluded_width = max(
+        len(str(count)) for _email, _name, _title, _tree, _included, count, _arrow in specs
     )
+    choices = []
+    for email, name, title, tree_size, included_count, excluded_count, arrow in specs:
+        title_cell = f"{title:<{title_width}}  ·  " if title_width else ""
+        marker = f"  {arrow}" if arrow else ""
+        choices.append(
+            (
+                email,
+                f"{name:<{name_width}}  ·  {title_cell}"
+                f"tree {tree_size:>{tree_width}}  ·  "
+                f"included {included_count:>{included_width}}  ·  "
+                f"excluded {excluded_count:>{excluded_width}}{marker}",
+            )
+        )
+    return choices
 
 
 def present_selected_reporting_teams(
@@ -1705,16 +1736,32 @@ def present_selected_reporting_teams(
     changed = False
     stack = [manager_email.casefold()]
     names = {manager_email.casefold(): manager_label}
+    excluded_names: list[str] = []
+    included_names: list[str] = []
     rows: list[TeamLicenseRecord] = []
 
-    def show_breakdown(note: str) -> list[TeamLicenseRecord]:
+    def remember(name: str, *, include: bool) -> None:
+        source = excluded_names if include else included_names
+        target = included_names if include else excluded_names
+        if name in source:
+            source.remove(name)
+        if name not in target:
+            target.append(name)
+
+    def selection_note() -> str:
+        return (
+            f"Excluded: {' · '.join(excluded_names)}\n"
+            f"Included: {' · '.join(included_names)}"
+        )
+
+    def show_breakdown() -> list[TeamLicenseRecord]:
         selected_workers = [
             worker for worker in people if worker.email.casefold() in included
         ]
         current = build_team_license_rows(selected_workers, records)
         print(
             "\n"
-            + f"{note}\n\n"
+            + f"{selection_note()}\n\n"
             + render_team_license_report(
                 manager_label,
                 current,
@@ -1734,13 +1781,7 @@ def present_selected_reporting_teams(
             break
         crumb = " > ".join(names[email] for email in stack)
         action, email = picker(
-            [
-                (
-                    worker.email,
-                    reporting_level_choice_label(worker, workers, included),
-                )
-                for worker in directs
-            ],
+            reporting_level_choices(directs, workers, included),
             prompt="direct > ",
             header=(
                 f"{crumb} · their directs · Right=open their team · Left=back · "
@@ -1771,17 +1812,16 @@ def present_selected_reporting_teams(
         tree = reporting_tree_emails(workers, chosen.email)
         if action == "include":
             included |= tree
-            verb = "Included"
         else:
             included -= tree
-            verb = "Excluded"
+        remember(chosen.full_name, include=action == "include")
         changed = True
-        rows = show_breakdown(f"{verb} {chosen.full_name} and their reporting tree")
+        rows = show_breakdown()
 
     if not changed:
         return False
     if not rows:
-        rows = show_breakdown(f"{manager_label} · current selection")
+        rows = show_breakdown()
     listed = offer_show_employee_list(rows, input_fn=input_fn, isatty=interactive)
     if listed:
         print("\n" + listed)
