@@ -1647,73 +1647,41 @@ def reporting_org_people(
     )
 
 
-def _selected_team_roots(
+def manager_direct_reports(
     workers: list[ReportingWorker],
-    chosen: list[ReportingWorker],
+    manager_email: str,
 ) -> list[ReportingWorker]:
-    parent = {worker.email.casefold(): worker.manager_email.casefold() for worker in workers}
-    chosen_emails = {worker.email.casefold() for worker in chosen}
-
-    def reports_to_selected(email: str) -> bool:
-        current = parent.get(email, "")
-        while current:
-            if current in chosen_emails:
-                return True
-            current = parent.get(current, "")
-        return False
-
-    return [worker for worker in chosen if not reports_to_selected(worker.email.casefold())]
+    manager = manager_email.casefold()
+    return sorted(
+        [worker for worker in workers if worker.manager_email.casefold() == manager],
+        key=lambda worker: (worker.full_name.casefold(), worker.email),
+    )
 
 
-def combine_selected_subtrees(
+def reporting_tree_emails(
     workers: list[ReportingWorker],
-    leads: list[ReportingWorker],
-) -> list[ReportingWorker]:
-    """Selected people plus everyone below them, without counting anyone twice."""
-    combined: list[ReportingWorker] = []
-    seen: set[str] = set()
-    for lead in _selected_team_roots(workers, leads):
-        group = [
-            ReportingWorker(
-                email=lead.email,
-                full_name=lead.full_name,
-                depth=1,
-                manager_email=lead.manager_email,
-                job_title=lead.job_title,
-            ),
-            *[
-                ReportingWorker(
-                    email=person.email,
-                    full_name=person.full_name,
-                    depth=person.depth + 1,
-                    manager_email=person.manager_email,
-                    job_title=person.job_title,
-                )
-                for person in rebase_subtree(workers, lead.email)
-            ],
-        ]
-        for person in group:
-            key = person.email.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            combined.append(person)
-    return combined
-
-
-def exclude_selected_subtrees(
-    workers: list[ReportingWorker],
-    selected: list[ReportingWorker],
-) -> list[ReportingWorker]:
-    excluded = {
-        person.email.casefold()
-        for root in selected
-        for person in [
-            root,
-            *rebase_subtree(workers, root.email),
-        ]
+    root_email: str,
+) -> set[str]:
+    root = root_email.casefold()
+    return {
+        root,
+        *(person.email.casefold() for person in rebase_subtree(workers, root_email)),
     }
-    return [worker for worker in workers if worker.email.casefold() not in excluded]
+
+
+def reporting_level_choice_label(
+    worker: ReportingWorker,
+    workers: list[ReportingWorker],
+    included: set[str],
+) -> str:
+    state = "included" if worker.email.casefold() in included else "excluded"
+    tree_size = len(reporting_tree_emails(workers, worker.email))
+    has_directs = bool(manager_direct_reports(workers, worker.email))
+    arrow = "  →" if has_directs else ""
+    return (
+        f"{reporting_team_choice_label(worker)}"
+        f"  ·  tree {tree_size}  ·  {state}{arrow}"
+    )
 
 
 def present_selected_reporting_teams(
@@ -1723,69 +1691,97 @@ def present_selected_reporting_teams(
     manager_email: str,
     manager_label: str,
     input_fn=input,
-    pick_choice=None,
-    pick_multi=None,
+    pick_level=None,
     isatty: bool | None = None,
 ) -> bool:
-    """Build a reporting slice by including or excluding selected people and their trees."""
+    """Walk direct reports level by level and refresh the license breakdown."""
     people = reporting_org_people(workers, manager_email)
     interactive = sys.stdin.isatty() if isatty is None else isatty
-    if not people or not interactive:
+    if not people or not interactive or not manager_direct_reports(workers, manager_email):
         return False
-    choose = pick_choice or fzf_pick_choice
-    mode = choose(
-        [
-            ("include", "Include selected people and their reporting trees"),
-            ("exclude", "Start with everyone; remove selected people and their trees"),
-            ("back", "Keep the full organization"),
-        ],
-        prompt="team builder > ",
-        header=f"{manager_label} · choose how to build the report",
-    )
-    if mode not in {"include", "exclude"}:
-        return False
-    picker = pick_multi or fzf_pick_multi
-    selected = {
-        email.casefold()
-        for email in picker(
+    picker = pick_level or fzf_pick_tree_action
+    by_email = {worker.email.casefold(): worker for worker in people}
+    included = {worker.email.casefold() for worker in people}
+    changed = False
+    stack = [manager_email.casefold()]
+    names = {manager_email.casefold(): manager_label}
+    rows: list[TeamLicenseRecord] = []
+
+    def show_breakdown(note: str) -> list[TeamLicenseRecord]:
+        selected_workers = [
+            worker for worker in people if worker.email.casefold() in included
+        ]
+        current = build_team_license_rows(selected_workers, records)
+        print(
+            "\n"
+            + f"{note}\n\n"
+            + render_team_license_report(
+                manager_label,
+                current,
+                manager_email=manager_email,
+                include_employees=False,
+            )
+        )
+        return current
+
+    while True:
+        current_email = stack[-1]
+        directs = manager_direct_reports(workers, current_email)
+        if not directs:
+            if len(stack) > 1:
+                stack.pop()
+                continue
+            break
+        crumb = " > ".join(names[email] for email in stack)
+        action, email = picker(
             [
                 (
                     worker.email,
-                    f"{reporting_team_choice_label(worker)}"
-                    f"  ·  line {worker.depth}"
-                    f"  ·  tree {len(rebase_subtree(workers, worker.email)) + 1}",
+                    reporting_level_choice_label(worker, workers, included),
                 )
-                for worker in people
+                for worker in directs
             ],
-            prompt="person > ",
+            prompt="direct > ",
             header=(
-                f"{manager_label} · type a name · Tab adds and clears search · "
-                "selected people stay marked · Enter confirms"
+                f"{crumb} · their directs · Right=open their team · Left=back · "
+                "Ctrl-Y=include tree · Ctrl-E=exclude tree · Enter=summary"
             ),
-            clear_query_on_toggle=True,
         )
-    }
-    chosen = [worker for worker in people if worker.email.casefold() in selected]
-    if not chosen:
+        action = (action or "").strip().lower()
+        chosen = by_email.get((email or "").casefold())
+        if action in {"", "done", "enter"}:
+            break
+        if action in {"cancel", "esc"}:
+            if not changed:
+                return False
+            break
+        if action in {"back", "left"}:
+            if len(stack) > 1:
+                stack.pop()
+            continue
+        if chosen is None:
+            continue
+        if action in {"drill", "right"}:
+            if manager_direct_reports(workers, chosen.email):
+                names[chosen.email.casefold()] = chosen.full_name
+                stack.append(chosen.email.casefold())
+            continue
+        if action not in {"include", "exclude"}:
+            continue
+        tree = reporting_tree_emails(workers, chosen.email)
+        if action == "include":
+            included |= tree
+            verb = "Included"
+        else:
+            included -= tree
+            verb = "Excluded"
+        changed = True
+        rows = show_breakdown(f"{verb} {chosen.full_name} and their reporting tree")
+
+    if not changed:
         return False
-    if mode == "include":
-        selected_workers = combine_selected_subtrees(workers, chosen)
-        selection_text = f"Included {len(chosen)} people and their reporting trees"
-    else:
-        selected_workers = exclude_selected_subtrees(people, chosen)
-        selection_text = f"Excluded {len(chosen)} person{'s' if len(chosen) != 1 else ''} and their reporting tree{'s' if len(chosen) != 1 else ''}"
-    names = ", ".join(lead.full_name for lead in chosen)
-    rows = build_team_license_rows(selected_workers, records)
-    print(
-        "\n"
-        + f"{selection_text}: {names}\n\n"
-        + render_team_license_report(
-            f"{manager_label} > {mode.title()} selection",
-            rows,
-            manager_email=manager_email,
-            include_employees=False,
-        )
-    )
+    if not rows:
+        rows = show_breakdown(f"{manager_label} · current selection")
     listed = offer_show_employee_list(rows, input_fn=input_fn, isatty=interactive)
     if listed:
         print("\n" + listed)
@@ -2648,6 +2644,80 @@ def fzf_pick_choice(
     if ans.isdigit() and 1 <= int(ans) <= len(entries):
         return entries[int(ans) - 1][0]
     return None
+
+
+def fzf_pick_tree_action(
+    entries: list[tuple[str, str]],
+    *,
+    prompt: str = "direct > ",
+    header: str = "",
+) -> tuple[str, str | None]:
+    """One key from the current direct-report list: drill, back, include, exclude, done, or cancel."""
+    if not entries:
+        return ("cancel", None)
+    if shutil.which("fzf") and sys.stdin.isatty():
+        lines = [f"{key}\t{label}" for key, label in entries]
+        cmd = [
+            "fzf",
+            "--ansi",
+            "--no-mouse",
+            "--height=45%",
+            "--reverse",
+            "--border=rounded",
+            "--cycle",
+            "--delimiter=\t",
+            "--with-nth=2",
+            f"--prompt={prompt}",
+            "--pointer=▶",
+            f"--header={header}",
+            (
+                "--footer=Right=their directs · Left=back · Ctrl-Y=include tree · "
+                "Ctrl-E=exclude tree · Enter=summary · Esc=cancel"
+            ),
+            "--expect=right,left,ctrl-y,ctrl-e",
+        ]
+        proc = subprocess.run(
+            cmd,
+            input="\n".join(lines) + "\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return ("cancel", None)
+        output = proc.stdout.splitlines()
+        key = output[0].strip() if output else ""
+        email = None
+        if len(output) > 1 and output[1].strip():
+            email = output[1].split("\t", 1)[0].strip()
+        action = {
+            "": "done",
+            "right": "drill",
+            "left": "back",
+            "ctrl-y": "include",
+            "ctrl-e": "exclude",
+        }.get(key, "done")
+        return (action, email)
+
+    if header:
+        print(f"\n{header}")
+    for idx, (_key, label) in enumerate(entries, 1):
+        print(f"  {idx}. {label}")
+    print("  i N include · x N exclude · > N their directs · < back · Enter done")
+    ans = input(f"\n{prompt}").strip().lower()
+    if not ans:
+        return ("done", None)
+    if ans in {"<", "back", "left"}:
+        return ("back", None)
+    if ans in {"q", "quit", "cancel", "esc"}:
+        return ("cancel", None)
+    parts = ans.split()
+    if len(parts) == 2 and parts[1].isdigit():
+        number = int(parts[1])
+        verb = {"i": "include", "x": "exclude", ">": "drill", "in": "include", "out": "exclude"}.get(parts[0])
+        if verb and 1 <= number <= len(entries):
+            return (verb, entries[number - 1][0])
+    return ("done", None)
 
 
 def fzf_pick_multi(

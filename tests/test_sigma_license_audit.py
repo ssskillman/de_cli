@@ -536,7 +536,7 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         }
         self.assertEqual(table_rows["Barends, Katie Leigh"], ["2", "0", "0", "0", "1", "1"])
 
-    def test_gtm_exclusion_removes_selected_people_and_their_trees(self):
+    def test_gtm_tree_starts_at_directs_and_refreshes_after_each_exclusion(self):
         workers = [
             ReportingWorker(
                 "katie.barends@iterable.com",
@@ -564,18 +564,22 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             ReportingWorker("outsider@iterable.com", "Outside, Olivia", 1, "someone.else@iterable.com"),
         ]
         seen = []
+        actions = iter([
+            ("exclude", "katie.barends@iterable.com"),
+            ("drill", "seth.charles@iterable.com"),
+            ("exclude", "sam@iterable.com"),
+            ("done", None),
+        ])
 
-        def pick_multi(entries, **_kwargs):
-            seen.append(entries)
-            return ["katie.barends@iterable.com"]
+        def pick_level(entries, **kwargs):
+            seen.append((kwargs["header"], [email for email, _label in entries]))
+            return next(actions)
 
         prompts = []
 
         def input_fn(prompt):
             prompts.append(prompt)
-            if "detailed user list" in prompt:
-                return "y"
-            return "n"
+            return "y" if "detailed user list" in prompt else "n"
 
         output = io.StringIO()
         with redirect_stdout(output):
@@ -585,35 +589,29 @@ class SigmaLicenseAuditTests(unittest.TestCase):
                 manager_email="teri.hatfield@iterable.com",
                 manager_label="GTM Team (Teri Hatfield)",
                 input_fn=input_fn,
-                pick_choice=lambda _entries, **_kwargs: "exclude",
-                pick_multi=pick_multi,
+                pick_level=pick_level,
                 isatty=True,
             )
 
         text = output.getvalue()
         self.assertTrue(presented)
         self.assertEqual(
-            [label for _email, label in seen[0]],
-            [
-                "Barends, Katie Leigh  ·  VP, Value Engineering  ·  line 1  ·  tree 3",
-                "Charles, Seth  ·  Director, Sales  ·  line 1  ·  tree 2",
-                "Lovelace, Ada  ·  Engineer  ·  line 2  ·  tree 2",
-                "Sales, Sam  ·  line 2  ·  tree 1",
-                "Third, Dee  ·  line 3  ·  tree 1",
-            ],
+            seen[0][1],
+            ["katie.barends@iterable.com", "seth.charles@iterable.com"],
         )
-        self.assertIn("License breakdown", text)
+        self.assertIn("their directs", seen[0][0])
+        self.assertEqual(seen[2][1], ["sam@iterable.com"])
+        self.assertGreaterEqual(text.count("License breakdown"), 2)
         employees = text.split("Employees", 1)[-1]
         self.assertIn("Charles, Seth", employees)
-        self.assertIn("Sales, Sam", employees)
+        self.assertNotIn("Sales, Sam", employees)
         self.assertNotIn("Barends, Katie Leigh", employees)
         self.assertNotIn("Lovelace, Ada", employees)
         self.assertNotIn("Third, Dee", employees)
         self.assertNotIn("Outside, Olivia", text)
-        self.assertIn("Excluded 1 person and their reporting tree", text)
         self.assertTrue(any("detailed user list" in prompt for prompt in prompts))
 
-    def test_gtm_inclusion_can_select_any_person_and_their_tree(self):
+    def test_right_arrow_level_can_include_one_reporting_tree(self):
         workers = [
             ReportingWorker(
                 "katie.barends@iterable.com",
@@ -631,10 +629,12 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             ),
             ReportingWorker("dee@iterable.com", "Third, Dee", 3, "ada@iterable.com"),
         ]
-
-        def input_fn(prompt):
-            return "y" if "detailed user list" in prompt else "n"
-
+        actions = iter([
+            ("exclude", "katie.barends@iterable.com"),
+            ("drill", "katie.barends@iterable.com"),
+            ("include", "ada@iterable.com"),
+            ("done", None),
+        ])
         output = io.StringIO()
         with redirect_stdout(output):
             MODULE.present_selected_reporting_teams(
@@ -642,9 +642,8 @@ class SigmaLicenseAuditTests(unittest.TestCase):
                 records=[],
                 manager_email="teri.hatfield@iterable.com",
                 manager_label="GTM Team (Teri Hatfield)",
-                input_fn=input_fn,
-                pick_choice=lambda _entries, **_kwargs: "include",
-                pick_multi=lambda _entries, **_kwargs: ["ada@iterable.com"],
+                input_fn=lambda prompt: "y" if "detailed user list" in prompt else "n",
+                pick_level=lambda _entries, **_kwargs: next(actions),
                 isatty=True,
             )
         employees = output.getvalue().split("Employees", 1)[-1]
@@ -652,19 +651,15 @@ class SigmaLicenseAuditTests(unittest.TestCase):
         self.assertIn("Third, Dee", employees)
         self.assertNotIn("Barends, Katie Leigh", employees)
 
-    def test_cancelling_gtm_team_builder_leaves_the_full_list_prompt(self):
+    def test_leaving_the_gtm_tree_unchanged_keeps_the_full_list_prompt(self):
         workers, _records = self._subteam_fixture()
-
-        def pick_multi(_entries, **_kwargs):
-            raise AssertionError("picker should not open when the option is declined")
 
         presented = MODULE.present_selected_reporting_teams(
             workers=workers,
             records=[],
             manager_email="teri.hatfield@iterable.com",
             manager_label="GTM Team (Teri Hatfield)",
-            pick_choice=lambda _entries, **_kwargs: "back",
-            pick_multi=pick_multi,
+            pick_level=lambda _entries, **_kwargs: ("done", None),
             isatty=True,
         )
         self.assertFalse(presented)
