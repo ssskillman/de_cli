@@ -27,7 +27,7 @@ class Tool:
     category: str = "general"
     # Short label for fzf menu (~60–80 chars); ``description`` is full help text.
     menu_summary: str = ""
-    # Shown after picking a tool in the interactive menu (runtime expectations).
+    # Shown on the confirm prompt. Set only when menu_requires_confirm is true.
     menu_hint: str = ""
     # Interactive menu: require typing the tool name before run (deploy / prod writes).
     menu_requires_confirm: bool = False
@@ -121,10 +121,6 @@ TOOLS: tuple[Tool, ...] = (
             "No args → fzf. Remove and update pick a user; Enter applies."
         ),
         menu_summary="Add, update, or remove Astro workspace and deployment users",
-        menu_hint=(
-            "Organization remove is UI-only (opens Astronomer). "
-            "Workspace remove only drops workspace access."
-        ),
         script=str(Path.home() / "de" / "astro_users.sh"),
         aliases=("astro-user", "astro-access"),
         category="airflow",
@@ -172,7 +168,6 @@ TOOLS: tuple[Tool, ...] = (
             "--prod for production (prompts env if omitted)."
         ),
         menu_summary="CHS Snowflake → SF Account health score (sandbox / capped prod)",
-        menu_hint="Dry-run default · --live-write + --prod for capped prod SF updates",
         script="scripts/run-customer-health-score-sandbox.sh",
         root="bi_astronomer",
         aliases=("chs", "account-health", "health-score"),
@@ -205,7 +200,6 @@ TOOLS: tuple[Tool, ...] = (
             "and Quickstart jobs; Enter runs the one you pick."
         ),
         menu_summary="Run a saved transformation",
-        menu_hint="Enter runs the job. Right arrow shows the latest run log tail.",
         script=str(Path.home() / "de" / "fivetran_transformations.sh"),
         aliases=("ft-run", "transformations"),
         category="fivetran",
@@ -217,7 +211,6 @@ TOOLS: tuple[Tool, ...] = (
             "Right arrow shows the platform log for the highlighted job."
         ),
         menu_summary="Show what is running",
-        menu_hint="Right arrow shows the log. Nothing is started.",
         script=str(Path.home() / "de" / "fivetran_running.sh"),
         aliases=("ft-running", "fivetran-live"),
         category="fivetran",
@@ -248,7 +241,7 @@ TOOLS: tuple[Tool, ...] = (
         script="scripts/run-opp-formula-refresh-local.sh",
         root="bi_astronomer",
         aliases=("opp-formulas", "opp-formula", "sfdc-formulas"),
-        category="local",
+        category="salesforce",
         default_args=(
             "--full",
             "--write-snowflake",
@@ -281,7 +274,6 @@ TOOLS: tuple[Tool, ...] = (
             "ahead/behind its base. Fetches before comparing."
         ),
         menu_summary="Scan ~/github clones: branch ahead/behind",
-        menu_hint="Fetches each repo. Pass a path to scan somewhere else.",
         script=str(Path.home() / "bin" / "git_repo_check.sh"),
         aliases=("git-repos", "repo-check", "repos"),
         category="local",
@@ -342,7 +334,6 @@ TOOLS: tuple[Tool, ...] = (
             "(dry-run by default; same Sigma CLI flow as sigma-user-downgrade)"
         ),
         menu_summary="Deactivate users and reassign their docs",
-        menu_hint="Dry-run default · --execute --yes applies Sigma member archive",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_user_deactivate.py"),
@@ -357,7 +348,6 @@ TOOLS: tuple[Tool, ...] = (
             "SCIM-inactive users stay inactive unless you pass --force."
         ),
         menu_summary="Reactivate a user by email",
-        menu_hint="Pass the email. Applies immediately. --force also clears SCIM inactive.",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_reactivate_user.py"),
@@ -373,7 +363,6 @@ TOOLS: tuple[Tool, ...] = (
             "(Teri Hatfield), reclaim licenses, downgrade or deactivate"
         ),
         menu_summary="License audit, GTM team report, and seat reclamation",
-        menu_hint="Dry-run default · --execute applies downgrades or deactivations",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_license_audit.py"),
@@ -387,10 +376,10 @@ TOOLS: tuple[Tool, ...] = (
             "GTM Team (Teri Hatfield): list all active direct and indirect "
             "reports from ADP with their Sigma license tier. After the list, "
             "ask whether people with no Sigma account should be created as View, "
-            "then whether View members should be upgraded to Act+."
+            "then whether View members should be upgraded to Act+. Sub teams "
+            "can be upgraded entirely or one person at a time."
         ),
         menu_summary="GTM Team (Teri Hatfield)",
-        menu_hint="License table · Y adds missing View users, then can upgrade View to Act+",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_license_audit.py"),
@@ -405,10 +394,10 @@ TOOLS: tuple[Tool, ...] = (
             "Value Engineering (Katie Barends): list all active direct and "
             "indirect reports from ADP with their Sigma license tier. After "
             "the list, ask whether people with no Sigma account should be "
-            "created as View, then whether View members should be upgraded to Act+."
+            "created as View, then whether View members should be upgraded to Act+. "
+            "Sub teams can be upgraded entirely or one person at a time."
         ),
         menu_summary="Value Engineering (Katie Barends)",
-        menu_hint="License table · Y adds missing View users, then can upgrade View to Act+",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_license_audit.py"),
@@ -442,6 +431,37 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sigma-wb-list",),
     ),
     Tool(
+        name="sigma-ensure-workspace",
+        description=(
+            "Create the Iterable | Data & Analytics Sigma workspace and its folders "
+            "when they are missing. Existing workspaces, folders, and documents "
+            "are left unchanged."
+        ),
+        menu_summary="Create Data & Analytics workspace folders if missing",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_ensure_workspace.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-workspace", "ensure-sigma-workspace"),
+    ),
+    Tool(
+        name="sigma-share-workspace",
+        description=(
+            "Walk Iterable | Data & Analytics and confirm who to share each "
+            "workspace and folder with. Default grantee is all members of the "
+            "organization. fzf can pick a team or people instead. Nothing is "
+            "shared until you confirm that node."
+        ),
+        menu_summary="Confirm sharing for each Data & Analytics folder",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_share_workspace.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-share", "share-sigma-workspace"),
+    ),
+    Tool(
         name="sigma-search-workbooks",
         description=(
             "Search Sigma workbooks by name. "
@@ -449,7 +469,6 @@ TOOLS: tuple[Tool, ...] = (
             "No args prompts for the pattern."
         ),
         menu_summary="Search workbooks by name (* and ? wildcards)",
-        menu_hint="Case-insensitive. Plain text matches anywhere. --include-archived adds archived.",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_search_workbooks.py"),
@@ -458,13 +477,27 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sigma-find-workbook", "find-workbook"),
     ),
     Tool(
+        name="sigma-swap-data-model-connection",
+        description=(
+            "Swap a data model's connection, or transfer ownership of one "
+            "data model or dataset. No args opens fzf: type to filter, "
+            "Up/Down wraps. Preview unless you confirm or pass --execute --yes."
+        ),
+        menu_summary="Swap a model connection, or transfer one model/dataset",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_swap_data_model_connection.py"),
+        ),
+        category="sigma",
+        aliases=("sigma-swap-connection", "sigma-reassign-connection"),
+    ),
+    Tool(
         name="sigma-move-workbooks",
         description=(
             "Move selected Sigma workbooks between folders/workspaces. "
             "No args → fzf browse source/dest folders, pick workbooks, owner, confirm."
         ),
         menu_summary="URL or fzf folders; pick workbooks; destination; confirm move",
-        menu_hint="PATCHes Sigma inode parentId/ownerId — confirm inside the wizard",
         script=str(Path.home() / "de" / "scripts" / "sigma_move_workbooks.py"),
         category="sigma",
         aliases=("sigma-move-wb", "move-sigma-workbooks"),
@@ -476,7 +509,6 @@ TOOLS: tuple[Tool, ...] = (
             "Paste its URL or inode ID, pick the new owner, review, and confirm."
         ),
         menu_summary="Transfer one workbook to a new owner",
-        menu_hint="One workbook only · pick owner by email · confirms before PATCH",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_reassign_workbook.py"),
@@ -519,7 +551,6 @@ TOOLS: tuple[Tool, ...] = (
             "(conversations.history + replies; default channel C01V64XA4AK)"
         ),
         menu_summary="Sync Slack channel messages to local CSV",
-        menu_hint="Needs ~/.config/de/slack.env SLACK_BOT_TOKEN; bot must be in channel",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "slack_channel_sync.py"),

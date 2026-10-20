@@ -14,59 +14,14 @@ from .menu_groups import (
 )
 from .registry import tools_sorted
 
-# Longer than fzf subtitle — shown before tool pick and in `de groups`.
-GROUP_BLURBS: dict[str, str] = {
-    "sfdc": (
-        "Salesforce-facing workflows: Opportunity formula MERGE to Snowflake, "
-        "customer health score sync to Account, and ad-hoc Opp SOQL. "
-        "Uses SF CLI (and Snowflake browser SSO for writes)."
-    ),
-    "sigma": (
-        "Sigma Computing admin: API CLI, license inventory, workbook search "
-        "and lists, dataset migration, and user downgrade, deactivate, and reactivate. "
-        "OAuth via Sigma CLI."
-    ),
-    "airflow": (
-        "Astronomer / Airflow: list deployments, deploy DAGs to Astro, "
-        "the interactive DAG control center (trigger runs, watch logs), "
-        "and workspace or deployment user access."
-    ),
-    "bi_apps": (
-        "skillman-iterable/bi_applications: DE Daily Pulse (dry-run or smoke post "
-        "to #daily_pulse_est). Uses scripts/run-local.sh and repo .env layers."
-    ),
-    "local": (
-        "Local bi-astronomer scripts (not scheduled in Astro): AirOps, order sync, "
-        "and Outlook SNDS. git-repo-check fetches clones under ~/github and "
-        "prints how far each branch is ahead or behind its base."
-    ),
-    "deploy": (
-        "Production app deploys: SALT GCP Firebase preview and Netlify prod for "
-        "salt_app. Always confirm the target environment before running."
-    ),
-    "dbt": (
-        "Run dbt Core or Cloud against projects in ~/.config/de/config.toml "
-        "(-p project, --pick, or forward any dbt args)."
-    ),
-    "fivetran": (
-        "Fivetran individual model runs, a picker to run any transformation, "
-        "and a list of transformations and connectors that are running."
-    ),
-}
-
-
-def group_blurb(key: str) -> str | None:
-    return GROUP_BLURBS.get(key)
-
 
 def print_menu_groups_guide(console: Console | None = None) -> None:
     """Doctor-style overview of menu groups and tools."""
     c = console or Console(stderr=True)
     c.print("[bold]de menu groups[/bold] — what each bucket is for\n")
 
-    for key, subtitle in MENU_GROUPS:
+    for key, _subtitle, blurb in MENU_GROUPS:
         label = menu_group_label(key)
-        blurb = GROUP_BLURBS.get(key, subtitle)
         tools = tools_in_menu_group(key)
         c.print(f"[bold cyan]{label}[/bold cyan] [dim]({key})[/dim]")
         c.print(f"  {blurb}\n")

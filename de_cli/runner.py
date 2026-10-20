@@ -15,6 +15,7 @@ from .banner import print_banner
 from .menu_confirm import confirm_menu_run, daily_pulse_smoke_ready
 from .menu_groups import (
     breadcrumb,
+    group_blurb,
     menu_group_for_tool,
     menu_group_label,
     ordered_menu_groups,
@@ -22,7 +23,7 @@ from .menu_groups import (
     tools_by_names,
     tools_in_menu_group,
 )
-from .menu_guide import group_blurb, print_menu_groups_guide
+from .menu_guide import print_menu_groups_guide
 from .menu_pick import pick_key, pick_tool_from_list
 from .menu_state import (
     ALL_TOOLS_KEY,

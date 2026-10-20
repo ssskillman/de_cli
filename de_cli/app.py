@@ -8,8 +8,8 @@ from rich.console import Console
 from . import __version__
 from .banner import print_banner
 from .doctor import run_doctor
-from .registry import Tool, find_tool, tools_sorted
 from .menu_guide import print_menu_groups_guide
+from .registry import Tool, find_tool, tools_sorted
 from .runner import interactive_menu, list_tools, run_tool_then_maybe_menu
 
 console = Console(stderr=True)
@@ -32,51 +32,8 @@ app = typer.Typer(
     help=(
         "DE ops toolkit — thin Python wrappers around CLIs and repo scripts.\n\n"
         "Run with no arguments for an interactive fzf menu (↑/↓, type to filter).\n\n"
-        "Every tool name and alias is listed below (e.g. `de fivetran` == `de ft`). "
-        "For wrapped tools, `-h` / `--help` is forwarded to the underlying script/CLI.\n\n"
-        # \b tells Click not to rewrap this block (keeps examples one-per-line).
-        "\b\n"
-        "Examples:\n"
-        "  de                         # fzf menu — pick a tool\n"
-        "  de --list                  # table of tools + targets\n"
-        "  de groups                  # menu group guide (what Deploy, SFDC, etc. mean)\n"
-        "  de doctor                  # env / auth / path health check\n"
-        "  de ft -h                   # Fivetran script help (alias for fivetran)\n"
-        "  de fivetran --history      # recent Fivetran model runs\n"
-        "  de astro-dags dev          # DAG picker on the dev deployment\n"
-        "  de astro-dags prod --runs failed   # browse failed runs, stream task logs\n"
-        "  de dags prod outlook       # alias: prefill DAG fuzzy query\n"
-        "  de dbt projects            # list configured local dbt projects\n"
-        "  de dbt run --select foo    # dbt in default project (config)\n"
-        "  de dbt -p udi test         # dbt in the `udi` project\n"
-        "  de dbt --pick run          # fzf pick project, then dbt run\n"
-        "  de dbt --help              # underlying dbt CLI help (default project)\n"
-        "  de astro-ls                # astro deployment list\n"
-        "  de opp-formula-refresh     # full SF extract + Snowflake MERGE (browser SSO)\n"
-        "  de opp-formula-refresh --limit 10 --open-only --write-snowflake\n"
-        "  de opp-formula-refresh --limit 10 --open-only   # smoke, no Snowflake write\n"
-        "  de customer-health-score   # CHS dry-run; prompts env (sandbox/prod) + limit\n"
-        "  de chs --prod --smoke-test --auth sf-cli --limit 25 "
-        "--snowflake-auth externalbrowser\n"
-        "  de chs --prod --live-write --auth sf-cli --limit 10   # capped prod write\n"
-        "  de chs --smoke-test --sandbox full --auth sf-cli --all\n"
-        "  de daily-pulse             # DE pulse dry-run, last 24h\n"
-        "  de pulse --hours 48        # same, 48h window\n"
-        "  de which ft                # print resolved script/CLI path\n"
-        "  de salt-deploy --help      # SALT Firebase deploy help\n"
-        "  de sigma                   # mint token, then Sigma CLI prompt\n"
-        "  de sigma --help            # Sigma CLI help (after token mint)\n"
-        "  de sigma api workbooks list --params '{\"limit\":20}'\n"
-        "  de sigma-workbooks-list --limit 20\n"
-        "  de sigma-search-workbooks 'deliver*'\n"
-        "  de sigma-reactivate-user ada@iterable.com\n"
-        "  de sigma-gtm-team              # Teri Hatfield direct/indirect license report\n"
-        "  de sigma-value-engineering     # Katie Barends direct/indirect license report\n"
-        "  de sigma-licenses              # fzf menu (summary / report / teams)\n"
-        "  de licenses summary            # billed-tier + account-type matrices\n"
-        "  de sigma-audit --summary       # audit licenses vs Snowflake ADP terminations\n"
-        "  de sigma-audit --utilization   # paid license activity, dormant & view-only builders\n"
-        "  de sigma-audit --paid-only --active-only  # list departed users on paid seats"
+        "Every tool name and alias is a command below. "
+        "For wrapped tools, -h / --help is forwarded to the underlying script/CLI."
     ),
     add_completion=False,
     no_args_is_help=False,

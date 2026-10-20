@@ -4,16 +4,78 @@ from __future__ import annotations
 
 from .registry import Tool, tools_sorted
 
-# (key, subtitle for fzf row) — default order by typical use; last-used group moves up.
-MENU_GROUPS: tuple[tuple[str, str], ...] = (
-    ("sfdc", "Opportunity formulas, CHS → SFDC, SOQL"),
-    ("sigma", "Sigma CLI, licenses, workbook search, datasets, user admin, reactivate"),
-    ("airflow", "Astro deployments, DAG deploy, DAG control, user access"),
-    ("bi_apps", "Daily Pulse and other bi-applications monorepo tools"),
-    ("local", "Local bi-astronomer runners (laptop)"),
-    ("deploy", "SALT & Netlify production app deploys"),
-    ("dbt", "dbt Core / Cloud in configured projects"),
-    ("fivetran", "Model runs, transformation runs, and what is running now"),
+# key, fzf subtitle, guide text (`de groups` and the line above a group's tools).
+MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
+    (
+        "sfdc",
+        "Opportunity formulas, CHS → SFDC, SOQL",
+        (
+            "Salesforce-facing workflows: Opportunity formula MERGE to Snowflake, "
+            "customer health score sync to Account, and ad-hoc Opp SOQL. "
+            "Uses SF CLI (and Snowflake browser SSO for writes)."
+        ),
+    ),
+    (
+        "sigma",
+        "Sigma CLI, licenses, search, sharing, deactivate and reactivate",
+        (
+            "Sigma Computing admin: API CLI, license inventory, workbook search "
+            "and lists, data-model connection swap, one data model or dataset "
+            "ownership transfer, dataset migration, workspace and folder bootstrap, "
+            "per-folder sharing, and user downgrade, deactivate, and reactivate. "
+            "OAuth via Sigma CLI."
+        ),
+    ),
+    (
+        "airflow",
+        "Astro deployments, DAG deploy, DAG control, user access",
+        (
+            "Astronomer / Airflow: list deployments, deploy DAGs to Astro, "
+            "the interactive DAG control center (trigger runs, watch logs), "
+            "and workspace or deployment user access."
+        ),
+    ),
+    (
+        "bi_apps",
+        "Daily Pulse and other bi-applications monorepo tools",
+        (
+            "skillman-iterable/bi_applications: DE Daily Pulse (dry-run or smoke post "
+            "to #daily_pulse_est). Uses scripts/run-local.sh and repo .env layers."
+        ),
+    ),
+    (
+        "local",
+        "Local bi-astronomer runners (laptop)",
+        (
+            "Local bi-astronomer scripts (not scheduled in Astro): AirOps, order sync, "
+            "and Outlook SNDS. git-repo-check fetches clones under ~/github and "
+            "prints how far each branch is ahead or behind its base."
+        ),
+    ),
+    (
+        "deploy",
+        "SALT & Netlify production app deploys",
+        (
+            "Production app deploys: SALT GCP Firebase preview and Netlify prod for "
+            "salt_app. Always confirm the target environment before running."
+        ),
+    ),
+    (
+        "dbt",
+        "dbt Core / Cloud in configured projects",
+        (
+            "Run dbt Core or Cloud against projects in ~/.config/de/config.toml "
+            "(-p project, --pick, or forward any dbt args)."
+        ),
+    ),
+    (
+        "fivetran",
+        "Model runs, transformation runs, and what is running now",
+        (
+            "Fivetran individual model runs, a picker to run any transformation, "
+            "and a list of transformations and connectors that are running."
+        ),
+    ),
 )
 
 _CATEGORY_TO_GROUP: dict[str, str] = {
@@ -29,30 +91,16 @@ _CATEGORY_TO_GROUP: dict[str, str] = {
     "general": "local",
 }
 
-# Tools whose registry category does not match the parent menu bucket.
-_TOOL_TO_GROUP: dict[str, str] = {
-    "opp-formula-refresh": "sfdc",
-    "opp-formulas": "sfdc",
-    "opp-formula": "sfdc",
-    "sfdc-formulas": "sfdc",
-    "netlify-prod-deploy": "deploy",
-    "netlify-prod": "deploy",
-    "netlify": "deploy",
-    "salt-deploy": "deploy",
-    "salt": "deploy",
-    "daily-pulse": "bi_apps",
-    "daily-pulse-smoke-est": "bi_apps",
-    "pulse": "bi_apps",
-    "de-pulse": "bi_apps",
-    "pulse-smoke": "bi_apps",
-}
-
 
 def menu_group_for_tool(tool: Tool) -> str:
-    for name in tool.names:
-        if name in _TOOL_TO_GROUP:
-            return _TOOL_TO_GROUP[name]
     return _CATEGORY_TO_GROUP.get(tool.category, "local")
+
+
+def group_blurb(key: str) -> str | None:
+    for group_key, _subtitle, blurb in MENU_GROUPS:
+        if group_key == key:
+            return blurb
+    return None
 
 
 def menu_group_label(key: str) -> str:
@@ -93,7 +141,7 @@ def tools_in_menu_group(group_key: str) -> tuple[Tool, ...]:
 def ordered_menu_groups() -> list[tuple[str, str]]:
     """Platforms in the interactive menu, alphabetized by display label."""
     return sorted(
-        MENU_GROUPS,
+        ((key, subtitle) for key, subtitle, _blurb in MENU_GROUPS),
         key=lambda pair: menu_group_label(pair[0]).casefold(),
     )
 
