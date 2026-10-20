@@ -14,27 +14,37 @@ T = TypeVar("T")
 console = Console(stderr=True)
 
 
-def _fzf_pick(lines: list[str], *, header: str, prompt: str) -> str | None:
+def _fzf_pick(
+    lines: list[str],
+    *,
+    header: str,
+    prompt: str,
+    border_label: str = "",
+) -> str | None:
+    command = [
+        "fzf",
+        "--ansi",
+        "--no-mouse",
+        "--height=60%",
+        "--reverse",
+        "--border=rounded",
+        "--header-border=bottom",
+        "--info=inline-right",
+        "--cycle",
+        "--delimiter=\t",
+        "--with-nth=2",
+        f"--prompt={prompt}",
+        "--pointer=▶",
+        "--marker=◉ ",
+        f"--header={header}",
+        # Up on the first row jumps to the last, and Down on the last jumps to the first.
+        '--bind=up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up',
+        '--bind=down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down',
+    ]
+    if border_label:
+        command.append(f"--border-label= {border_label} ")
     proc = subprocess.run(
-        [
-            "fzf",
-            "--ansi",
-            "--no-mouse",
-            "--height=60%",
-            "--reverse",
-            "--border=rounded",
-            "--cycle",
-            "--delimiter=\t",
-            "--with-nth=2",
-            f"--prompt={prompt}",
-            "--pointer=▶",
-            "--marker=◉ ",
-            f"--header={header}",
-            "--info=inline",
-            # Up on the first row jumps to the last, and Down on the last jumps to the first.
-            '--bind=up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up',
-            '--bind=down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down',
-        ],
+        command,
         input="\n".join(lines) + "\n",
         text=True,
         capture_output=True,
@@ -78,6 +88,7 @@ def pick_key(
     header: str,
     prompt: str,
     list_title: str,
+    border_label: str = "",
 ) -> str | None:
     """Return selected entry key from ``(key, display)`` rows."""
     if not entries:
@@ -86,7 +97,12 @@ def pick_key(
     lines = [f"{key}\t{display}" for key, display in entries]
 
     if sys.stdin.isatty() and sys.stdout.isatty() and shutil.which("fzf"):
-        return _fzf_pick(lines, header=header, prompt=prompt)
+        return _fzf_pick(
+            lines,
+            header=header,
+            prompt=prompt,
+            border_label=border_label,
+        )
 
     if not sys.stdin.isatty():
         console.print(
@@ -114,10 +130,15 @@ def pick_tool_from_list(
     header: str,
     prompt: str,
     list_title: str,
+    border_label: str = "",
 ) -> T | None:
     entries = [(key_fn(t), label_fn(t)) for t in tools]
     chosen = pick_key(
-        entries, header=header, prompt=prompt, list_title=list_title
+        entries,
+        header=header,
+        prompt=prompt,
+        list_title=list_title,
+        border_label=border_label,
     )
     if chosen is None:
         return None

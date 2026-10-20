@@ -322,43 +322,65 @@ def _tools_for_menu_group(menu_group: str | None) -> tuple[Tool, ...]:
     return tools_sorted()
 
 
+def tool_menu_view(
+    tools: Sequence[Tool],
+    *,
+    show_group: bool,
+    include_hint: bool = False,
+) -> tuple[str, list[str]]:
+    """Aligned command rows. A single group does not repeat its name on every line."""
+    name_width = max((len(tool.name) for tool in tools), default=0)
+    summaries = [
+        tool_menu_line(tool, include_hint=include_hint) for tool in tools
+    ]
+    controls = "↑/↓ move  ·  type to filter  ·  enter run  ·  esc back"
+    if show_group:
+        groups = [menu_group_label(menu_group_for_tool(tool)) for tool in tools]
+        group_width = max((len(group) for group in groups), default=0)
+        columns = f"{'command':<{name_width}}  {'group':<{group_width}}  action"
+        rows = [
+            f"{tool.name:<{name_width}}  {group:<{group_width}}  {summary}"
+            for tool, group, summary in zip(tools, groups, summaries)
+        ]
+    else:
+        columns = f"{'command':<{name_width}}  action"
+        rows = [
+            f"{tool.name:<{name_width}}  {summary}"
+            for tool, summary in zip(tools, summaries)
+        ]
+    return f"{controls}\n{columns}", rows
+
+
 def pick_tool(menu_group: str | None = None) -> Tool | None:
     tools = list(_tools_for_menu_group(menu_group))
     if not tools:
         console.print("[yellow]No tools in this group.[/yellow]")
         return None
 
-    scope = menu_group_label(menu_group) if menu_group else ""
     show_hints = menu_group in {RECENT_KEY, PINNED_KEY}
-
-    blurb = (
-        group_blurb(menu_group)
-        if menu_group
-        and menu_group
-        not in {ALL_TOOLS_KEY, RECENT_KEY, PINNED_KEY, GUIDE_KEY}
-        else None
+    single_group = bool(
+        menu_group and menu_group not in {ALL_TOOLS_KEY, RECENT_KEY, PINNED_KEY}
     )
+
+    blurb = group_blurb(menu_group) if single_group else None
     if blurb:
         console.print(f"[dim]{blurb}[/dim]\n")
 
-    def label(tool: Tool) -> str:
-        bucket = (
-            scope
-            if menu_group
-            and menu_group not in {ALL_TOOLS_KEY, RECENT_KEY, PINNED_KEY}
-            else menu_group_label(menu_group_for_tool(tool))
-        )
-        summary = tool_menu_line(tool, include_hint=show_hints)
-        return f"{tool.name:<22}  {bucket:<10}  {summary}"
-
-    trail = breadcrumb(menu_group)
+    header, labels = tool_menu_view(
+        tools,
+        show_group=not single_group,
+        include_hint=show_hints,
+    )
+    labels_by_name = dict(zip((tool.name for tool in tools), labels))
+    title = menu_group_label(menu_group) if menu_group else "Tools"
     return pick_tool_from_list(
         tools,
         key_fn=lambda t: t.name,
-        label_fn=label,
-        header=f"{trail}  ·  ↑/↓  ·  filter  ·  Enter run  ·  Esc back",
+        label_fn=lambda tool: labels_by_name[tool.name],
+        header=header,
         prompt=f"de {menu_group or 'tools'} > ",
-        list_title=f"Tools · {trail}",
+        list_title=f"Tools · {title}",
+        border_label=title if single_group else "",
     )
 
 

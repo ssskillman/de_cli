@@ -76,10 +76,48 @@ class MenuRunnerTests(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "key\tdisplay\n"
-            result = _fzf_pick(["key\tdisplay"], header="hdr", prompt="prompt> ")
+            result = _fzf_pick(
+                ["key\tdisplay"],
+                header="hdr",
+                prompt="prompt> ",
+                border_label="Fivetran",
+            )
             self.assertEqual(result, "key")
             cmd = mock_run.call_args[0][0]
             self.assertIn("--no-mouse", cmd)
+            self.assertIn("--info=inline-right", cmd)
+            self.assertIn("--header-border=bottom", cmd)
+            self.assertIn("--border-label= Fivetran ", cmd)
+
+    def test_single_group_menu_aligns_actions_without_repeating_the_group(self):
+        from de_cli.runner import tool_menu_view
+
+        tools = [
+            Tool(
+                name="fivetran",
+                description="run",
+                menu_summary="Run a dbt selector",
+                argv=("fivetran",),
+            ),
+            Tool(
+                name="fivetran-running",
+                description="live",
+                menu_summary="Show what is running",
+                argv=("fivetran-running",),
+            ),
+            Tool(
+                name="fivetran-transformations",
+                description="jobs",
+                menu_summary="Run a saved transformation",
+                argv=("fivetran-transformations",),
+            ),
+        ]
+        header, rows = tool_menu_view(tools, show_group=False)
+        self.assertIn("command", header.splitlines()[1])
+        self.assertNotIn("Fivetran", "\n".join(rows))
+        action_at = {row.index("  Run") if "  Run" in row else row.index("  Show") for row in rows}
+        self.assertEqual(len(action_at), 1)
+        self.assertIn("fivetran-transformations  Run a saved transformation", rows)
 
 
 if __name__ == "__main__":

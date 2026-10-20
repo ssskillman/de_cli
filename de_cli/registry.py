@@ -192,7 +192,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="fivetran",
         description="Fivetran Individual Model Run — interactive dbt selector",
-        menu_summary="Fivetran individual model run (interactive dbt selector)",
+        menu_summary="Run a dbt selector",
         script="scripts/fivetran_individual_model_run",
         root="bi_astronomer",
         aliases=("ft", "fivetran-model"),
@@ -204,7 +204,7 @@ TOOLS: tuple[Tool, ...] = (
             "Run a Fivetran transformation. No args opens an fzf of dbt Core "
             "and Quickstart jobs; Enter runs the one you pick."
         ),
-        menu_summary="Run transformations",
+        menu_summary="Run a saved transformation",
         menu_hint="Enter runs the job. Right arrow shows the latest run log tail.",
         script=str(Path.home() / "de" / "fivetran_transformations.sh"),
         aliases=("ft-run", "transformations"),
@@ -216,7 +216,7 @@ TOOLS: tuple[Tool, ...] = (
             "List Fivetran transformations and connectors that are running. "
             "Right arrow shows the platform log for the highlighted job."
         ),
-        menu_summary="Running transformations and connectors",
+        menu_summary="Show what is running",
         menu_hint="Right arrow shows the log. Nothing is started.",
         script=str(Path.home() / "de" / "fivetran_running.sh"),
         aliases=("ft-running", "fivetran-live"),
