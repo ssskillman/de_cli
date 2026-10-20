@@ -288,9 +288,12 @@ def resolve_dbt_binary(
             Path("/opt/homebrew/bin/dbt"),
             Path("/usr/local/bin/dbt"),
         ):
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                if not _looks_like_core(candidate):
-                    return candidate
+            if (
+                candidate.is_file()
+                and os.access(candidate, os.X_OK)
+                and not _looks_like_core(candidate)
+            ):
+                return candidate
 
     which = shutil.which("dbt")
     if which:

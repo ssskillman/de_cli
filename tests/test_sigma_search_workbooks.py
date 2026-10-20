@@ -2,7 +2,6 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).parents[1] / "scripts" / "sigma_search_workbooks.py"
 SPEC = importlib.util.spec_from_file_location("sigma_search_workbooks", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)

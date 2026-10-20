@@ -69,8 +69,8 @@ def run_doctor() -> int:
         venv_py_detail = "missing — recreate ~/de/.venv"
     checks.append(Check("de venv python", venv_py.is_file(), venv_py_detail))
     try:
-        import typer  # noqa: F401
         import rich  # noqa: F401
+        import typer  # noqa: F401
 
         checks.append(Check("typer/rich", True, "importable"))
     except ImportError as e:

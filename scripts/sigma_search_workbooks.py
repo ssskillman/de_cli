@@ -12,7 +12,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sigma_move_workbooks import (  # noqa: E402
+from sigma_move_workbooks import (
     DEFAULT_ENV,
     DEFAULT_TOKEN_HELPER,
     SigmaApi,

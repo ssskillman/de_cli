@@ -5,15 +5,14 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from rich.console import Console
 from rich.table import Table
 
 from .banner import print_banner
 from .menu_confirm import confirm_menu_run, daily_pulse_smoke_ready
-from .menu_guide import group_blurb, print_menu_groups_guide
 from .menu_groups import (
     breadcrumb,
     menu_group_for_tool,
@@ -23,6 +22,7 @@ from .menu_groups import (
     tools_by_names,
     tools_in_menu_group,
 )
+from .menu_guide import group_blurb, print_menu_groups_guide
 from .menu_pick import pick_key, pick_tool_from_list
 from .menu_state import (
     ALL_TOOLS_KEY,
@@ -34,7 +34,7 @@ from .menu_state import (
     read_recent_tool_names,
     write_last_menu_group,
 )
-from .registry import Tool, find_tool, tools_sorted
+from .registry import Tool, tools_sorted
 from .snowflake_local import apply_snowflake_local_user
 
 console = Console(stderr=True)
@@ -211,9 +211,7 @@ def pause_after_tool() -> bool:
         console.print("\n[dim]Press Enter to return to menu (or 'q' to quit)...[/dim]", end="")
         sys.stderr.flush()
         ans = input().strip().lower()
-        if ans in ("q", "quit", "exit"):
-            return False
-        return True
+        return ans not in ("q", "quit", "exit")
     except (EOFError, KeyboardInterrupt):
         return False
 
@@ -235,7 +233,7 @@ def list_tools(*, as_table: bool = True) -> None:
     for tool in tools:
         try:
             target = tool.resolve_display_target()
-        except Exception:  # noqa: BLE001
+        except Exception:
             target = tool.script or " ".join(tool.argv or ())
         table.add_row(
             tool.name,

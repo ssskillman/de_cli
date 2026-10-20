@@ -11,6 +11,7 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "sigma_license_audit.py"
 SPEC = importlib.util.spec_from_file_location("sigma_license_audit", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 import sys
+
 sys.modules["sigma_license_audit"] = MODULE
 assert SPEC.loader
 SPEC.loader.exec_module(MODULE)
@@ -919,6 +920,85 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             isatty=True,
         )
         self.assertEqual(client.updates, [("m-leaf", "Act+")])
+
+    def test_critical_paid_list_downgrades_only_the_people_picked(self):
+        andrew = MemberAuditRecord(
+            email="andrew.bogart@iterable.com",
+            member_id="m-andrew",
+            first_name="Andrew",
+            last_name="Bogart",
+            member_type="admin",
+            license_type="Build",
+            user_kind="internal",
+            sigma_status="active",
+            is_archived=False,
+            is_inactive=False,
+            is_departed=True,
+            termination_date="2026-02-07",
+            is_paid=True,
+            risk_level="CRITICAL",
+        )
+        justin = MemberAuditRecord(
+            email="justin.sigette@iterable.com",
+            member_id="m-justin",
+            first_name="Justin",
+            last_name="Sigette",
+            member_type="Analyze",
+            license_type="Analyze",
+            user_kind="internal",
+            sigma_status="active",
+            is_archived=False,
+            is_inactive=False,
+            is_departed=True,
+            termination_date="2026-10-17",
+            is_paid=True,
+            risk_level="CRITICAL",
+        )
+        client = FakeSigmaClient(members=[])
+        seen = []
+
+        def pick_multi(entries, **_kwargs):
+            seen.append([email for email, _label in entries])
+            return ["justin.sigette@iterable.com"]
+
+        with redirect_stdout(io.StringIO()):
+            shown = MODULE.offer_selected_downgrade(
+                client,
+                [andrew, justin],
+                pick_multi=pick_multi,
+                pick_choice=lambda _entries, **_kwargs: "dry-run",
+            )
+        self.assertTrue(shown)
+        self.assertEqual(
+            seen[0],
+            ["andrew.bogart@iterable.com", "justin.sigette@iterable.com"],
+        )
+        self.assertEqual(client.updates, [])
+        self.assertEqual(justin.license_type, "Analyze")
+
+        with (
+            unittest.mock.patch.object(MODULE.sys.stdin, "isatty", return_value=True),
+            unittest.mock.patch("builtins.input", return_value="yes"),
+            redirect_stdout(io.StringIO()),
+        ):
+            MODULE.offer_selected_downgrade(
+                client,
+                [andrew, justin],
+                pick_multi=lambda _entries, **_kwargs: ["andrew.bogart@iterable.com"],
+                pick_choice=lambda _entries, **_kwargs: "prod",
+            )
+        self.assertEqual(client.updates, [("m-andrew", "View")])
+        self.assertEqual(andrew.license_type, "View")
+        self.assertEqual(justin.license_type, "Analyze")
+
+        with redirect_stdout(io.StringIO()):
+            cancelled = MODULE.offer_selected_downgrade(
+                client,
+                [andrew, justin],
+                pick_multi=lambda _entries, **_kwargs: [],
+                pick_choice=lambda _entries, **_kwargs: (_ for _ in ()).throw(AssertionError("mode")),
+            )
+        self.assertFalse(cancelled)
 
     def test_audit_menu_offers_departed_seats_then_alphabetical_actions(self):
         entries = MODULE.audit_menu_entries(departed_active_paid=2, departed_active_free=98)

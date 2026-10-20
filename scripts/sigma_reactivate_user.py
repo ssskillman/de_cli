@@ -12,7 +12,7 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from sigma_license_audit import DEFAULT_SIGMA_ENV, SigmaClient  # noqa: E402
+from sigma_license_audit import DEFAULT_SIGMA_ENV, SigmaClient
 
 
 class ReactivateError(RuntimeError):

@@ -200,6 +200,8 @@ pick_key() {
   [[ -n "$input" ]] || die "no transformations returned"
 
   if command -v fzf >/dev/null 2>&1 && [[ -e /dev/tty ]]; then
+    # fzf expands $FZF_POS. The shell must not.
+    # shellcheck disable=SC2016
     if ! sel=$(printf '%s\n' "$input" | fzf \
       --height=70% \
       --reverse \

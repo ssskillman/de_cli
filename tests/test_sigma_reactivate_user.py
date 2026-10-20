@@ -2,7 +2,6 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).parents[1] / "scripts" / "sigma_reactivate_user.py"
 SPEC = importlib.util.spec_from_file_location("sigma_reactivate_user", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)

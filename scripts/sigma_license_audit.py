@@ -15,8 +15,6 @@ import csv
 import io
 import json
 import os
-import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -25,10 +23,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
 
 # Re-exec into UDI virtualenv if snowflake.connector is not in current environment
 def _maybe_reexec_into_udi_venv() -> None:
@@ -656,7 +655,7 @@ ORDER BY 2, 1;
             ts = data.get("timestamp")
             if ts:
                 cached_time = datetime.fromisoformat(ts)
-                age = (datetime.now(timezone.utc) - cached_time).total_seconds() / 3600.0
+                age = (datetime.now(UTC) - cached_time).total_seconds() / 3600.0
                 if age > max_age_hours:
                     return None
             records = data.get("workers", [])
@@ -668,7 +667,7 @@ ORDER BY 2, 1;
     def save_cache(workers: list[DepartedWorker], cache_file: Path = DEFAULT_CACHE_FILE) -> None:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "count": len(workers),
             "workers": [asdict(w) for w in workers],
         }
@@ -956,7 +955,7 @@ def build_audit_records(
             try:
                 clean_c = created_at.replace("Z", "+00:00")
                 dt_c = datetime.fromisoformat(clean_c)
-                days_since_created = max(0, (datetime.now(timezone.utc) - dt_c).days)
+                days_since_created = max(0, (datetime.now(UTC) - dt_c).days)
             except Exception:
                 pass
 
@@ -1088,7 +1087,7 @@ def render_team_employee_list(rows: list[TeamLicenseRecord], *, title: str = "Em
         ],
         numeric_columns={0, 2},
     )
-    return "\n".join([title, people])
+    return f"{title}\n{people}"
 
 
 def render_team_license_report(
@@ -1385,7 +1384,7 @@ def render_unlicensed_employee_list(employees: list[ActiveEmployee]) -> str:
         ],
         numeric_columns={0},
     )
-    return "\n".join(["Confirmed: no current or previous ADP email in Sigma", table])
+    return f"Confirmed: no current or previous ADP email in Sigma\n{table}"
 
 
 def render_former_email_matches(matches: list[FormerEmailMatch]) -> str:
@@ -1403,7 +1402,7 @@ def render_former_email_matches(matches: list[FormerEmailMatch]) -> str:
         ],
         numeric_columns={0},
     )
-    return "\n".join(["Matched through a previous ADP email — already in Sigma, not invited", table])
+    return f"Matched through a previous ADP email — already in Sigma, not invited\n{table}"
 
 
 def render_possible_name_matches(matches: list[PossibleNameMatch]) -> str:
@@ -1421,7 +1420,7 @@ def render_possible_name_matches(matches: list[PossibleNameMatch]) -> str:
         ],
         numeric_columns={0},
     )
-    return "\n".join(["Possible name match — review before inviting", table])
+    return f"Possible name match — review before inviting\n{table}"
 
 
 def emails_from_members(raw_members: list[Any]) -> set[str]:
@@ -1706,10 +1705,12 @@ def reporting_level_choices(
         choices.append(
             (
                 email,
-                f"{name:<{name_width}}  ·  {title_cell}"
-                f"tree {tree_size:>{tree_width}}  ·  "
-                f"included {included_count:>{included_width}}  ·  "
-                f"excluded {excluded_count:>{excluded_width}}{marker}",
+                (
+                    f"{name:<{name_width}}  ·  {title_cell}"
+                    f"tree {tree_size:>{tree_width}}  ·  "
+                    f"included {included_count:>{included_width}}  ·  "
+                    f"excluded {excluded_count:>{excluded_width}}{marker}"
+                ),
             )
         )
     return choices
@@ -1847,7 +1848,7 @@ def render_subteam_summary(
         table_rows,
         numeric_columns={1, 2, 3, 4, 5, 6},
     )
-    return "\n".join(["Sub teams", table])
+    return f"Sub teams\n{table}"
 
 
 def view_member_targets(
@@ -1964,7 +1965,7 @@ def offer_pick_view_members(
     if not targets or not interactive:
         return records
     answer = input_fn(
-        f"\nPick individual View members to upgrade to Act+? [y/N] "
+        "\nPick individual View members to upgrade to Act+? [y/N] "
     ).strip().lower()
     if answer not in {"y", "yes"}:
         return records
@@ -2997,7 +2998,7 @@ def run_remediation_plan(
         "              REMEDIATION EXECUTION SUMMARY                 ",
         "============================================================",
         f"Action:                   {action_title}",
-        f"Mode:                     Full Prod Send It",
+        "Mode:                     Full Prod Send It",
         f"Total Targeted:           {len(plan)}",
         f"Successfully Completed:   {succeeded}",
         f"Failed:                   {failed}",
@@ -3168,9 +3169,7 @@ def interactive_build_report(records: list[MemberAuditRecord]) -> None:
                 return True
             if "guest" in emp_set and r.user_kind == "guest":
                 return True
-            if "embed" in emp_set and r.user_kind == "embed":
-                return True
-            return False
+            return "embed" in emp_set and r.user_kind == "embed"
 
         filtered = [r for r in filtered if match_emp(r)]
 
@@ -3231,6 +3230,66 @@ def audit_menu_entries(*, departed_active_paid: int, departed_active_free: int) 
     return [*featured, *numbered, ("q", "q. Quit")]
 
 
+def offer_selected_downgrade(
+    client: SigmaClient,
+    targets: list[MemberAuditRecord],
+    *,
+    pick_multi=None,
+    pick_choice=None,
+) -> bool:
+    """Pick departed paid users to downgrade. Returns True when a plan was shown."""
+    if not targets:
+        return False
+    picker = pick_multi or fzf_pick_multi
+    choose = pick_choice or fzf_pick_choice
+    name_width = max(len(record.full_name) for record in targets)
+    tier_width = max(len(record.license_type) for record in targets)
+    type_width = max(len(record.member_type) for record in targets)
+    selected = {
+        email.casefold()
+        for email in picker(
+            [
+                (
+                    record.email,
+                    (
+                        f"{record.full_name:<{name_width}}  ·  {record.license_type:<{tier_width}}"
+                        f"  ·  {record.member_type:<{type_width}}"
+                        f"  ·  term {record.termination_date or '-'}"
+                    ),
+                )
+                for record in targets
+            ],
+            prompt="downgrade > ",
+            header="Tab selects who to downgrade to View · Enter confirms · Esc cancels",
+        )
+    }
+    chosen = [record for record in targets if record.email.casefold() in selected]
+    if not chosen:
+        return False
+    mode = choose(
+        [
+            ("dry-run", "Dry-run preview (no changes)"),
+            ("prod", "Downgrade the selected people to View in Sigma"),
+        ],
+        prompt="mode > ",
+        header=f"Downgrade {len(chosen)} departed paid user(s) to View",
+    )
+    if mode not in {"dry-run", "prod"}:
+        print("Cancelled.")
+        return False
+    run_remediation_plan(
+        client=client,
+        targets=chosen,
+        downgrade=True,
+        deactivate=False,
+        new_owner_email=None,
+        archive_docs=False,
+        execute=mode == "prod",
+        auto_confirm=False,
+    )
+    return True
+
+
 def interactive_menu(
     records: list[MemberAuditRecord],
     client: SigmaClient,
@@ -3262,6 +3321,10 @@ def interactive_menu(
             return 0
         elif choice in {"critical-paid", "list-paid"}:
             print(AuditReporter.render_table(departed_active_paid))
+            if not departed_active_paid:
+                input("\nPress Enter to return to menu...")
+                continue
+            offer_selected_downgrade(client, departed_active_paid)
             input("\nPress Enter to return to menu...")
         elif choice == "high-free":
             print(AuditReporter.render_table(departed_active_free))
@@ -3498,9 +3561,7 @@ def main() -> int:
                     return True
                 if "guest" in emp_set and r.user_kind == "guest":
                     return True
-                if "embed" in emp_set and r.user_kind == "embed":
-                    return True
-                return False
+                return "embed" in emp_set and r.user_kind == "embed"
 
             filtered = [r for r in filtered if match_cli_emp(r)]
 

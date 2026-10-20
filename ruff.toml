@@ -1,0 +1,5 @@
+target-version = "py312"
+
+[lint]
+# CLI commands catch Exception at the boundary, print it, and return to the menu.
+ignore = ["BLE001", "S110"]

@@ -5,11 +5,9 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from typing import Callable, TypeVar
+from collections.abc import Callable
 
 from rich.console import Console
-
-T = TypeVar("T")
 
 console = Console(stderr=True)
 
@@ -122,7 +120,7 @@ def pick_key(
     return _numbered_pick(entries, title=list_title)
 
 
-def pick_tool_from_list(
+def pick_tool_from_list[T](
     tools: list[T],
     *,
     key_fn: Callable[[T], str],
