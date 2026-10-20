@@ -303,7 +303,7 @@ TOOLS: tuple[Tool, ...] = (
             "Mint a Sigma API token, then run the Sigma CLI "
             "(no args → interactive sigma> prompt; else forward args)"
         ),
-        menu_summary="Mint Sigma token, then Sigma CLI (or forward args)",
+        menu_summary="Mint a token, then open the CLI",
         script=str(Path.home() / "de" / "sigma_cli.sh"),
         category="sigma",
         aliases=("sigma-cli",),
@@ -314,7 +314,7 @@ TOOLS: tuple[Tool, ...] = (
             "Bulk migrate Sigma datasets to data models "
             "(dry-run by default; --execute to migrate)"
         ),
-        menu_summary="Bulk migrate Sigma datasets → data models (dry-run default)",
+        menu_summary="Bulk migrate datasets to data models",
         script=str(
             Path.home() / "de" / "scripts" / "migrate_sigma_datasets.sh"
         ),
@@ -327,7 +327,7 @@ TOOLS: tuple[Tool, ...] = (
             "Downgrade a Sigma user's account type and migrate their My Documents "
             "contents to another user (dry-run by default)"
         ),
-        menu_summary="Downgrade Sigma user + migrate My Documents (dry-run)",
+        menu_summary="Downgrade a user and migrate My Documents",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_user_downgrade_handoff.py"),
@@ -341,7 +341,7 @@ TOOLS: tuple[Tool, ...] = (
             "Deactivate Sigma user(s) and reassign documents to another user "
             "(dry-run by default; same Sigma CLI flow as sigma-user-downgrade)"
         ),
-        menu_summary="Deactivate Sigma user(s); reassign docs (dry-run)",
+        menu_summary="Deactivate users and reassign their docs",
         menu_hint="Dry-run default · --execute --yes applies Sigma member archive",
         argv=(
             "python3",
@@ -356,7 +356,7 @@ TOOLS: tuple[Tool, ...] = (
             "Reactivate one Sigma user by email. Clears isArchived. "
             "SCIM-inactive users stay inactive unless you pass --force."
         ),
-        menu_summary="Reactivate a Sigma user by email",
+        menu_summary="Reactivate a user by email",
         menu_hint="Pass the email. Applies immediately. --force also clears SCIM inactive.",
         argv=(
             "python3",
@@ -423,7 +423,7 @@ TOOLS: tuple[Tool, ...] = (
             "Sigma license inventory — summary, report, teams, deactivate "
             "(no args → fzf menu; OAuth via Sigma CLI)"
         ),
-        menu_summary="Sigma license inventory, teams, deactivate (fzf menu)",
+        menu_summary="License inventory, teams, and deactivate",
         script="scripts/sigma-licenses/sigma-licenses",
         root="bi_astronomer",
         cwd_root="bi_astronomer",
@@ -436,7 +436,7 @@ TOOLS: tuple[Tool, ...] = (
             "List Sigma workbooks (auto-re-mint token on 401 / invalid token), "
             "prints entries[] as {id, name}."
         ),
-        menu_summary="List Sigma workbooks as {id, name}",
+        menu_summary="List workbooks",
         script=str(Path.home() / "de" / "sigma_workbooks_list.sh"),
         category="sigma",
         aliases=("sigma-wb-list",),
@@ -490,7 +490,7 @@ TOOLS: tuple[Tool, ...] = (
             "BI-owned Sigma workbooks as JSON/CSV: team, dashboard URL, endorsed, "
             "owner email, last viewed (optional audit JSON / snow)."
         ),
-        menu_summary="BI Sigma workbook inventory (JSON/CSV, last viewed)",
+        menu_summary="Workbook inventory",
         argv=(
             "python3",
             str(Path.home() / "de" / "scripts" / "sigma_bi_dashboard_inventory.py"),

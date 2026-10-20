@@ -322,14 +322,27 @@ def _tools_for_menu_group(menu_group: str | None) -> tuple[Tool, ...]:
     return tools_sorted()
 
 
+def menu_command_name(tool: Tool, group_key: str | None) -> str:
+    """Inside a group, hide the repeated ``sigma-`` / ``fivetran-`` prefix."""
+    name = tool.name
+    if group_key and name.startswith(f"{group_key}-"):
+        return name[len(group_key) + 1 :]
+    return name
+
+
 def tool_menu_view(
     tools: Sequence[Tool],
     *,
     show_group: bool,
     include_hint: bool = False,
+    group_key: str | None = None,
 ) -> tuple[str, list[str]]:
     """Aligned command rows. A single group does not repeat its name on every line."""
-    name_width = max((len(tool.name) for tool in tools), default=0)
+    names = [
+        tool.name if show_group else menu_command_name(tool, group_key)
+        for tool in tools
+    ]
+    name_width = max((len(name) for name in names), default=0)
     summaries = [
         tool_menu_line(tool, include_hint=include_hint) for tool in tools
     ]
@@ -339,14 +352,14 @@ def tool_menu_view(
         group_width = max((len(group) for group in groups), default=0)
         columns = f"{'command':<{name_width}}  {'group':<{group_width}}  action"
         rows = [
-            f"{tool.name:<{name_width}}  {group:<{group_width}}  {summary}"
-            for tool, group, summary in zip(tools, groups, summaries)
+            f"{name:<{name_width}}  {group:<{group_width}}  {summary}"
+            for name, group, summary in zip(names, groups, summaries)
         ]
     else:
         columns = f"{'command':<{name_width}}  action"
         rows = [
-            f"{tool.name:<{name_width}}  {summary}"
-            for tool, summary in zip(tools, summaries)
+            f"{name:<{name_width}}  {summary}"
+            for name, summary in zip(names, summaries)
         ]
     return f"{controls}\n{columns}", rows
 
@@ -370,6 +383,7 @@ def pick_tool(menu_group: str | None = None) -> Tool | None:
         tools,
         show_group=not single_group,
         include_hint=show_hints,
+        group_key=menu_group if single_group else None,
     )
     labels_by_name = dict(zip((tool.name for tool in tools), labels))
     title = menu_group_label(menu_group) if menu_group else "Tools"

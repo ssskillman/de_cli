@@ -112,12 +112,39 @@ class MenuRunnerTests(unittest.TestCase):
                 argv=("fivetran-transformations",),
             ),
         ]
-        header, rows = tool_menu_view(tools, show_group=False)
+        header, rows = tool_menu_view(tools, show_group=False, group_key="fivetran")
         self.assertIn("command", header.splitlines()[1])
-        self.assertNotIn("Fivetran", "\n".join(rows))
-        action_at = {row.index("  Run") if "  Run" in row else row.index("  Show") for row in rows}
+        self.assertNotIn("fivetran-running", "\n".join(rows))
+        self.assertNotIn("fivetran-transformations", "\n".join(rows))
+        action_at = {
+            row.index("  Run") if "  Run" in row else row.index("  Show") for row in rows
+        }
         self.assertEqual(len(action_at), 1)
-        self.assertIn("fivetran-transformations  Run a saved transformation", rows)
+        self.assertIn("transformations  Run a saved transformation", rows)
+        self.assertTrue(any(row.startswith("fivetran ") for row in rows))
+
+    def test_sigma_menu_drops_the_prefix_and_aligns_actions(self):
+        from de_cli.runner import tool_menu_view
+
+        tools = [
+            Tool(name="sigma", description="cli", menu_summary="Mint a token, then open the CLI", argv=("sigma",)),
+            Tool(name="sigma-gtm-team", description="gtm", menu_summary="GTM Team (Teri Hatfield)", argv=("gtm",)),
+            Tool(
+                name="sigma-swap-data-model-connection",
+                description="swap",
+                menu_summary="Swap a connection or transfer a model",
+                argv=("swap",),
+            ),
+        ]
+        _header, rows = tool_menu_view(tools, show_group=False, group_key="sigma")
+        text = "\n".join(rows)
+        self.assertIn("sigma  ", text)
+        self.assertIn("gtm-team", text)
+        self.assertIn("swap-data-model-connection", text)
+        self.assertNotIn("sigma-", text)
+        action_column = len("swap-data-model-connection") + 2
+        self.assertTrue(all(row[action_column - 2 : action_column] == "  " for row in rows))
+        self.assertTrue(all(row[action_column] != " " for row in rows))
 
 
 if __name__ == "__main__":
