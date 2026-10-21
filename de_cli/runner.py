@@ -139,6 +139,9 @@ def run_tool(tool: Tool, args: Sequence[str] | None = None) -> int:
         return 1
 
     cmd = [*cmd, *forwarded]
+    # Registered .py scripts rely on de's venv (rich, typer, …), not /usr/bin/python3.
+    if tool.script is not None and Path(cmd[0]).suffix == ".py":
+        cmd = [sys.executable, *cmd]
     executable = cmd[0]
 
     # Script paths must exist; bare CLIs are resolved via PATH.

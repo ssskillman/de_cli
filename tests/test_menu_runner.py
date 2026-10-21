@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,6 +72,21 @@ class MenuRunnerTests(unittest.TestCase):
             self.assertFalse(slack_bot_token_in_env(env_file))
             env_file.write_text("OTHER=1\n")
             self.assertFalse(slack_bot_token_in_env(env_file))
+
+    def test_run_tool_uses_de_venv_python_for_py_scripts(self):
+        from de_cli.runner import run_tool
+
+        tool = Tool(
+            name="opp-formula-refresh",
+            description="test",
+            script=str(Path.home() / "de" / "scripts" / "opp_formula_refresh_menu.py"),
+        )
+        with patch("de_cli.runner.subprocess.call", return_value=0) as mock_call:
+            run_tool(tool, ["--help"])
+        cmd = mock_call.call_args[0][0]
+        self.assertEqual(cmd[0], sys.executable)
+        self.assertTrue(cmd[1].endswith("opp_formula_refresh_menu.py"))
+        self.assertEqual(cmd[2], "--help")
 
     def test_fzf_pick_uses_no_mouse(self):
         with patch("subprocess.run") as mock_run:
