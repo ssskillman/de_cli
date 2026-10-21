@@ -32,7 +32,8 @@ de sf-opp-query            # SF Opp SOQL — human/csv/json (+ --pin)
 de daily-pulse             # bi-applications dry-run digest (Platforms → BI Apps)
 de daily-pulse-smoke-est   # post smoke to #daily_pulse_est (menu runs immediately when SLACK_BOT_TOKEN is in .env)
 de pulse --hours 48        # dry-run, 48h window
-de opp-formula-refresh --limit 10 --open-only --write-snowflake
+de opp-formula-refresh            # fzf: open Opps (first) vs full vs smoke
+de opp-formula-refresh --full --write-snowflake --snowflake-auth externalbrowser
 de netlify-prod-deploy     # cd salt_app && netlify_prod_deploy
 de astro-deploy            # → (cd bi-astronomer && astro deploy)
 de which fivetran

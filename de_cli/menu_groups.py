@@ -8,11 +8,11 @@ from .registry import Tool, tools_sorted
 MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
     (
         "sfdc",
-        "Opportunity formulas, CHS → SFDC, SOQL",
+        "Opportunity formulas, CHS → SFDC, SOQL, limits",
         (
             "Salesforce-facing workflows: Opportunity formula MERGE to Snowflake, "
-            "customer health score sync to Account, and ad-hoc Opp SOQL. "
-            "Uses SF CLI (and Snowflake browser SSO for writes)."
+            "customer health score sync to Account, ad-hoc Opp SOQL, and org API "
+            "limits (max and remaining). Uses SF CLI (and Snowflake browser SSO for writes)."
         ),
     ),
     (

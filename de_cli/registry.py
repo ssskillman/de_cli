@@ -229,25 +229,15 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="opp-formula-refresh",
         description=(
-            "SF Opportunity formula extract → Snowflake MERGE "
-            "(UDI_PROD.UDI_STG.OPPORTUNITY_FORMULA_VALUES). "
-            "No args = full run + Snowflake browser SSO + MERGE."
+            "SF Opportunity formula extract → Snowflake MERGE. "
+            "No args → fzf load profile (open Opps or full)."
         ),
-        menu_summary="Opp formula fields → UDI_PROD MERGE (menu = full + Snowflake SSO)",
-        menu_hint=(
-            "Full prod extract (~40k Opps) · Okta for Snowflake · MERGE to UDI_PROD (~2 min)"
-        ),
-        menu_requires_confirm=True,
-        script="scripts/run-opp-formula-refresh-local.sh",
-        root="bi_astronomer",
+        menu_summary="Opp formulas → UDI_PROD (fzf: open vs full vs smoke)",
+        menu_hint="Pick load mode: open-only is faster; full ~40k×80 cols ~7 min",
+        menu_requires_confirm=False,
+        script=str(Path.home() / "de" / "scripts" / "opp_formula_refresh_menu.py"),
         aliases=("opp-formulas", "opp-formula", "sfdc-formulas"),
         category="salesforce",
-        default_args=(
-            "--full",
-            "--write-snowflake",
-            "--snowflake-auth",
-            "externalbrowser",
-        ),
     ),
     Tool(
         name="order-sync-local",
@@ -576,6 +566,21 @@ TOOLS: tuple[Tool, ...] = (
         script=str(Path.home() / "de" / "scripts" / "slack_faq_daily.sh"),
         category="local",
         aliases=("slack-faq-pipeline",),
+    ),
+    Tool(
+        name="sfdc-limits",
+        description=(
+            "Salesforce REST org limits: maximum and remaining allocations "
+            "(services/data/v{apiVersion}/limits). Uses the SF CLI org from "
+            "opp-formula-refresh (default iterable-prod)."
+        ),
+        menu_summary="Org API limits (max and remaining)",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sfdc_limits.py"),
+        ),
+        category="salesforce",
+        aliases=("sf-limits", "org-limits"),
     ),
     Tool(
         name="sf-opp-query",
