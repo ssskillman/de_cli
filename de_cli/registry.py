@@ -409,6 +409,23 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("value-engineering", "ve-team", "katie-barends-team"),
     ),
     Tool(
+        name="sigma-act-build-to-act-plus",
+        description=(
+            "Report people on the Act account type. That type is a Build license. "
+            "The report lists those who are not doing build work, then lets you "
+            "choose who to move to Act+ (the true Act license)."
+        ),
+        menu_summary="Act Account Type Build License move to Act+ (True Act)",
+        menu_hint="Moves selected Act (Build) users with no build edits to Act+",
+        menu_requires_confirm=True,
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_act_build_to_act_plus.py"),
+        ),
+        category="sigma",
+        aliases=("act-to-act-plus", "act-build-to-act-plus"),
+    ),
+    Tool(
         name="sigma-licenses",
         description=(
             "Sigma license inventory — summary, report, teams, deactivate "
