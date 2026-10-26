@@ -40,7 +40,8 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
         "Daily Pulse and other bi-applications monorepo tools",
         (
             "skillman-iterable/bi_applications: DE Daily Pulse (dry-run or smoke post "
-            "to #daily_pulse_est). Uses scripts/run-local.sh and repo .env layers."
+            "to #daily_pulse_est). Uses scripts/run-local.sh and repo .env layers. "
+            "Gcloud Auth for Territory Planner signs in and prints the UAT Cloud Run revision."
         ),
     ),
     (

@@ -161,6 +161,18 @@ TOOLS: tuple[Tool, ...] = (
         menu_requires_confirm=True,
     ),
     Tool(
+        name="gcloud-auth-territory-planner",
+        description=(
+            "Sign in to gcloud as shawn.skillman@iterable.com, select project "
+            "udi-uat-504519, and print the live Territory Planner Cloud Run revision. "
+            "Login opens a browser."
+        ),
+        menu_summary="Gcloud Auth for Territory Planner",
+        script=str(Path.home() / "de" / "scripts" / "gcloud_auth_territory_planner.sh"),
+        category="bi_apps",
+        aliases=("territory-planner-auth", "gcloud-territory"),
+    ),
+    Tool(
         name="customer-health-score",
         description=(
             "Snowflake customer_health_score → SFDC Account.Customer_Health_Score__c "
