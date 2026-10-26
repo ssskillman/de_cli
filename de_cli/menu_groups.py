@@ -23,6 +23,8 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
             "and lists, data-model connection swap, one data model or dataset "
             "ownership transfer, dataset migration, workspace and folder bootstrap, "
             "per-folder sharing, and user downgrade, deactivate, and reactivate. "
+            "Act Account Type Build License move to Act+ (True Act) lists Act users "
+            "who are not building and moves the ones you pick. "
             "OAuth via Sigma CLI."
         ),
     ),
