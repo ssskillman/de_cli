@@ -2173,6 +2173,10 @@ class SigmaLicenseAuditTests(unittest.TestCase):
             "--bind=tab:toggle+clear-query,ctrl-a:select-all,ctrl-d:deselect-all",
             command,
         )
+        self.assertIn(
+            '--bind=up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up',
+            command,
+        )
 
     def test_render_table_contains_type_column(self):
         records = [

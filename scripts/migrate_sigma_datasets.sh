@@ -1094,7 +1094,9 @@ manage_error_workbook_badges() {
         (.datasets | join(", ")),
         .reportUrl
       ] | @tsv' <<<"$pending" \
-      | fzf --height=80% --border --delimiter=$'\t' --with-nth=2,3,4 \
+      | fzf --height=80% --border --cycle --delimiter=$'\t' --with-nth=2,3,4 \
+          --bind='up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up' \
+          --bind='down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down' \
           --prompt='Workbook to badge > ' \
           --header='NAME | LOCATION | FAILED DATASETS   (Esc: finish)')"; then
       echo "Badge review finished."
@@ -1111,7 +1113,9 @@ manage_error_workbook_badges() {
     [[ -n "$workbook_url" ]] && echo "URL:           $workbook_url"
 
     if ! badge="$(printf '%s\n' 'Warning' 'Deprecated' 'Skip' \
-      | fzf --height=40% --border --prompt='Set badge > ' \
+      | fzf --height=40% --border --cycle --prompt='Set badge > ' \
+          --bind='up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up' \
+          --bind='down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down' \
           --header="$workbook_name (Esc: return to workbook list)")"; then
       continue
     fi

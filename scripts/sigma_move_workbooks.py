@@ -196,6 +196,8 @@ def fzf_pick(
         "--reverse",
         "--border=rounded",
         "--cycle",
+        '--bind=up:transform:[ "$FZF_POS" -eq 1 ] && echo last || echo up',
+        '--bind=down:transform:[ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && echo first || echo down',
         "--delimiter=\t",
         "--with-nth=2",
         f"--prompt={prompt}",
