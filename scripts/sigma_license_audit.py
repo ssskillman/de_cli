@@ -1200,13 +1200,23 @@ def resolve_view_account_type(type_to_tier: dict[str, str]) -> str:
 
 
 def resolve_act_plus_account_type(type_to_tier: dict[str, str]) -> str:
-    """Iterable's Act+ account type is the Act license. The account type named Act is Build."""
-    for name, tier in type_to_tier.items():
-        if str(name).casefold() == "act+" and str(tier) == "Act":
-            return str(name)
-    for name in type_to_tier:
-        if str(name).casefold() == "act+":
-            return str(name)
+    """The account type Sigma bills as Act. That is Act+, or Act (True) after the rename.
+
+    The account type named Act is a Build license, so it is not this target.
+    """
+    names = [(str(name), str(tier)) for name, tier in type_to_tier.items() if str(name).strip()]
+    for name, tier in names:
+        if name.casefold() == "act+" and tier == "Act":
+            return name
+    for name, _tier in names:
+        if name.casefold() == "act+":
+            return name
+    act_licenses = [name for name, tier in names if tier == "Act" and name.casefold() != "act"]
+    for name in act_licenses:
+        if "true" in name.casefold():
+            return name
+    if len(act_licenses) == 1:
+        return act_licenses[0]
     return "Act+"
 
 
@@ -1786,7 +1796,7 @@ def present_selected_reporting_teams(
             prompt="direct > ",
             header=(
                 f"{crumb} · their directs · Right=open their team · Left=back · "
-                "Ctrl-Y=include tree · Ctrl-E=exclude tree · Enter=summary"
+                "Ctrl-Y=include tree · Ctrl-X=exclude tree · Enter=summary"
             ),
         )
         action = (action or "").strip().lower()
@@ -2717,9 +2727,9 @@ def fzf_pick_tree_action(
             f"--header={header}",
             (
                 "--footer=Right=their directs · Left=back · Ctrl-Y=include tree · "
-                "Ctrl-E=exclude tree · Enter=summary · Esc=cancel"
+                "Ctrl-X=exclude tree · Enter=summary · Esc=cancel"
             ),
-            "--expect=right,left,ctrl-y,ctrl-e",
+            "--expect=right,left,ctrl-y,ctrl-e,ctrl-x",
         ]
         proc = subprocess.run(
             cmd,
@@ -2741,6 +2751,7 @@ def fzf_pick_tree_action(
             "left": "back",
             "ctrl-y": "include",
             "ctrl-e": "exclude",
+            "ctrl-x": "exclude",
         }.get(key, "done")
         return (action, email)
 

@@ -8,11 +8,11 @@ from .registry import Tool, tools_sorted
 MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
     (
         "sfdc",
-        "Opportunity formulas, CHS → SFDC, SOQL, limits",
+        "Opportunity formulas, CHS → SFDC, SOQL, limits, API users",
         (
             "Salesforce-facing workflows: Opportunity formula MERGE to Snowflake, "
-            "customer health score sync to Account, ad-hoc Opp SOQL, and org API "
-            "limits (max and remaining). Uses SF CLI (and Snowflake browser SSO for writes)."
+            "customer health score sync to Account, ad-hoc Opp SOQL, org API "
+            "limits (max and remaining), and integration user password expiration. Uses SF CLI (and Snowflake browser SSO for writes)."
         ),
     ),
     (
@@ -22,9 +22,9 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
             "Sigma Computing admin: API CLI, license inventory, workbook search "
             "and lists, data-model connection swap, one data model or dataset "
             "ownership transfer, dataset migration, workspace and folder bootstrap, "
-            "per-folder sharing, and user downgrade, deactivate, and reactivate. "
-            "Act Account Type Build License move to Act+ (True Act) lists Act users "
-            "who are not building and moves the ones you pick. "
+            "per-folder sharing, user downgrade, deactivate, and reactivate, "
+            "creating a team or adding people to one from Sam Allen's directs, changing licenses "
+            "for one team, and moving Act (Build license) users who are not building to Act+. "
             "OAuth via Sigma CLI."
         ),
     ),
@@ -79,6 +79,17 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
             "and a list of transformations and connectors that are running."
         ),
     ),
+    (
+        "personal",
+        "Court Reserve and other personal jobs",
+        (
+            "Personal machine jobs. Court Reserve status check reads the weekend "
+            "scheduler, booking script, defaults, last run, sleep, and live processes. "
+            "Court Reserve Normal Schedule runs the live 7:45 AM booking. "
+            "Court Reserve Next Launch prints when that job fires next. "
+            "Court Reserve Live Status shows the scheduler, any booking process, and the last log lines."
+        ),
+    ),
 )
 
 _CATEGORY_TO_GROUP: dict[str, str] = {
@@ -91,6 +102,7 @@ _CATEGORY_TO_GROUP: dict[str, str] = {
     "sigma": "sigma",
     "deploy": "deploy",
     "bi_apps": "bi_apps",
+    "personal": "personal",
     "general": "local",
 }
 
@@ -118,6 +130,7 @@ def menu_group_label(key: str) -> str:
         "sfdc": "SFDC",
         "sigma": "Sigma",
         "bi_apps": "BI Apps",
+        "personal": "Personal",
         ALL_TOOLS_KEY: "All tools",
         RECENT_KEY: "Recent",
         PINNED_KEY: "Pinned",
