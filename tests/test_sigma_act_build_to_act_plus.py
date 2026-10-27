@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 import sigma_act_build_to_act_plus as report
-from sigma_license_audit import MemberAuditRecord
+from sigma_license_audit import MemberAuditRecord, resolve_act_plus_account_type
 
 
 def _person(**overrides) -> MemberAuditRecord:
@@ -116,6 +116,20 @@ class ActBuildToActPlusTests(unittest.TestCase):
         self.assertEqual(client.updates, [("m-ada", "Act+")])
         self.assertIn("Act+", prompts[-1])
         self.assertIn("1", prompts[-1])
+
+    def test_renamed_true_act_type_is_used_when_act_plus_is_gone(self):
+        self.assertEqual(
+            resolve_act_plus_account_type(
+                {"Act": "Build", "Act (True)": "Act", "View": "View", "build": "Build"}
+            ),
+            "Act (True)",
+        )
+
+    def test_act_plus_name_still_wins_when_it_exists(self):
+        self.assertEqual(
+            resolve_act_plus_account_type({"Act+": "Act", "Act (True)": "Act", "Act": "Build"}),
+            "Act+",
+        )
 
     def test_registry_lists_the_sigma_command(self):
         from de_cli.menu_groups import menu_group_for_tool

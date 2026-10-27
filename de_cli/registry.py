@@ -409,6 +409,42 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("value-engineering", "ve-team", "katie-barends-team"),
     ),
     Tool(
+        name="sigma-create-team",
+        description=(
+            "Create a Sigma team and its folder, or add people to a team that "
+            "already exists. People come from Sam Allen's direct reports. "
+            "Selecting a leader asks whether to choose people one level down or "
+            "add that leader and the whole reporting tree."
+        ),
+        menu_summary="Create team",
+        menu_hint="Create a new team, or add people to one that already exists",
+        menu_requires_confirm=True,
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_team_admin.py"),
+        ),
+        default_args=("create",),
+        category="sigma",
+        aliases=("sigma-new-team",),
+    ),
+    Tool(
+        name="sigma-team-licenses",
+        description=(
+            "Pick a Sigma team, then change one license type to another. "
+            "Members on any other license, and people not on the team, are left unchanged."
+        ),
+        menu_summary="Team license management",
+        menu_hint="Changes only members of one team who currently have the From license",
+        menu_requires_confirm=True,
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_team_admin.py"),
+        ),
+        default_args=("licenses",),
+        category="sigma",
+        aliases=("team-licenses", "sigma-team-license"),
+    ),
+    Tool(
         name="sigma-act-build-to-act-plus",
         description=(
             "Report people on the Act account type. That type is a Build license. "
@@ -610,6 +646,68 @@ TOOLS: tuple[Tool, ...] = (
         ),
         category="salesforce",
         aliases=("sf-limits", "org-limits"),
+    ),
+    Tool(
+        name="sfdc-api-users",
+        description=(
+            "Active Salesforce integration and API-only users, with password "
+            "expiration. Expired passwords are repeated in their own table. "
+            "Uses the SF CLI org from opp-formula-refresh (default iterable-prod)."
+        ),
+        menu_summary="API users and password expiration",
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sfdc_api_users.py"),
+        ),
+        category="salesforce",
+        aliases=("sf-api-users", "api-users"),
+    ),
+    Tool(
+        name="court-reserve-status",
+        description=(
+            "Read-only CourtReserve weekend readiness: LaunchAgent schedule, "
+            "booking script, reservation defaults, last log lines, Mac sleep, "
+            "and any booking process still running."
+        ),
+        menu_summary="Court Reserve Status Check",
+        script=str(Path.home() / "de" / "scripts" / "court_reserve_status.sh"),
+        category="personal",
+        aliases=("courtreserve", "cr-status"),
+    ),
+    Tool(
+        name="court-reserve-schedule",
+        description=(
+            "Run the normal CourtReserve booking: live, fast, submit at 7:45:00 AM. "
+            "Same script as ~/bin/run_booking.sh."
+        ),
+        menu_summary="Court Reserve Normal Schedule",
+        menu_hint="Live booking — waits, then clicks Save at 7:45 AM",
+        menu_requires_confirm=True,
+        script=str(Path.home() / "bin" / "run_booking.sh"),
+        category="personal",
+        aliases=("cr-schedule", "court-reserve-book"),
+    ),
+    Tool(
+        name="court-reserve-next",
+        description=(
+            "Read-only next CourtReserve LaunchAgent run: when it fires, "
+            "how long until then, and the booking date (the day after launch)."
+        ),
+        menu_summary="Court Reserve Next Launch",
+        script=str(Path.home() / "de" / "scripts" / "court_reserve_next.py"),
+        category="personal",
+        aliases=("cr-next",),
+    ),
+    Tool(
+        name="court-reserve-live",
+        description=(
+            "Read-only CourtReserve live status: scheduler state, any booking "
+            "process still running, and the last five log lines."
+        ),
+        menu_summary="Court Reserve Live Status",
+        script=str(Path.home() / "de" / "scripts" / "court_reserve_live.sh"),
+        category="personal",
+        aliases=("cr-live",),
     ),
     Tool(
         name="sf-opp-query",
