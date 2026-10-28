@@ -24,7 +24,8 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
             "ownership transfer, dataset migration, workspace and folder bootstrap, "
             "per-folder sharing, user downgrade, deactivate, and reactivate, "
             "creating a team or adding people to one from Sam Allen's directs, changing licenses "
-            "for one team, and moving Act (Build license) users who are not building to Act+. "
+            "for one team, updating selected people's account type and license, "
+            "and moving Act (Build license) users who are not building to Act+. "
             "OAuth via Sigma CLI."
         ),
     ),

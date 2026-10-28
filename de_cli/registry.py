@@ -445,6 +445,23 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("team-licenses", "sigma-team-license"),
     ),
     Tool(
+        name="sigma-update-license",
+        description=(
+            "Search Sigma people by name, select one or more with Tab, then "
+            "move them to another account type. The billed license is shown "
+            "in parentheses next to each account type."
+        ),
+        menu_summary="Update license",
+        menu_hint="Search, Tab to select people, then pick the account type (license)",
+        menu_requires_confirm=True,
+        argv=(
+            "python3",
+            str(Path.home() / "de" / "scripts" / "sigma_update_license.py"),
+        ),
+        category="sigma",
+        aliases=("update-license", "change-license"),
+    ),
+    Tool(
         name="sigma-act-build-to-act-plus",
         description=(
             "Report people on the Act account type. That type is a Build license. "
