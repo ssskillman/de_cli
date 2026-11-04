@@ -16,6 +16,15 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
         ),
     ),
     (
+        "sfdc_netsuite",
+        "REC001 listener smoke and contract sync",
+        (
+            "Salesforce contract to NetSuite (REC001) from the bi-astronomer checkout. "
+            "Listener smoke reads the 10 newest contracts with --sf-org iterable-prod and does not write. "
+            "Run contract sync resolves a contract, then dry run, the exception report, or prod-prompt watch."
+        ),
+    ),
+    (
         "sigma",
         "Sigma CLI, licenses, search, sharing, deactivate and reactivate",
         (
@@ -100,6 +109,7 @@ _CATEGORY_TO_GROUP: dict[str, str] = {
     "fivetran": "fivetran",
     "dbt": "dbt",
     "salesforce": "sfdc",
+    "sfdc_netsuite": "sfdc_netsuite",
     "sigma": "sigma",
     "deploy": "deploy",
     "bi_apps": "bi_apps",
@@ -129,6 +139,7 @@ def menu_group_label(key: str) -> str:
         "fivetran": "Fivetran",
         "dbt": "dbt",
         "sfdc": "SFDC",
+        "sfdc_netsuite": "SFDC_NetSuite Sync",
         "sigma": "Sigma",
         "bi_apps": "BI Apps",
         "personal": "Personal",

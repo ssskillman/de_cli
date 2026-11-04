@@ -735,6 +735,43 @@ TOOLS: tuple[Tool, ...] = (
         aliases=("sf-query", "sfq", "sfdc-query"),
         category="salesforce",
     ),
+    Tool(
+        name="sfdc_netsuite-listener-smoke",
+        description=(
+            "Read-only REC001 listener smoke: the 10 newest Salesforce contracts. "
+            "Uses the bi-astronomer .venv and --sf-org iterable-prod. "
+            "Does not start Airflow and does not write to Salesforce or NetSuite."
+        ),
+        menu_summary="Listener smoke",
+        argv=(
+            str(Path.home() / "github" / "bi-astronomer" / ".venv" / "bin" / "python"),
+            str(
+                Path.home()
+                / "github"
+                / "bi-astronomer"
+                / "scripts"
+                / "sf_contracts_netsuite_listener_smoke.py"
+            ),
+        ),
+        default_args=("--sf-org", "iterable-prod"),
+        cwd_root="bi_astronomer",
+        category="sfdc_netsuite",
+        aliases=("rec001-smoke", "netsuite-listener-smoke"),
+    ),
+    Tool(
+        name="sfdc_netsuite-run",
+        description=(
+            "Interactive REC001 runner. Resolves a Salesforce contract, then "
+            "dry run, the SFDC to NetSuite exception report, or prod-prompt watch. "
+            "Uses bi-astronomer scripts/run_sf_contracts_netsuite.sh."
+        ),
+        menu_summary="Run contract sync",
+        script="scripts/run_sf_contracts_netsuite.sh",
+        root="bi_astronomer",
+        cwd_root="bi_astronomer",
+        category="sfdc_netsuite",
+        aliases=("rec001", "sf-contracts-netsuite"),
+    ),
 )
 
 
