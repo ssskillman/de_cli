@@ -806,6 +806,13 @@ TOOLS: tuple[Tool, ...] = (
         category="sfdc_netsuite",
         aliases=("rec001-full-send", "prod-full-send"),
     ),
+    Tool(
+        name="udi-catalog-mcp",
+        description="Smoke UDI Catalog MCP: /health plus one ARR search",
+        menu_summary="Catalog MCP health + ARR search",
+        script=str(Path.home() / "de" / "scripts" / "udi_catalog_mcp.sh"),
+        category="local",
+    ),
 )
 
 

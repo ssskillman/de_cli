@@ -64,7 +64,8 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
         (
             "Local bi-astronomer scripts (not scheduled in Astro): AirOps, order sync, "
             "and Outlook SNDS. git-repo-check fetches clones under ~/github and "
-            "prints how far each branch is ahead or behind its base."
+            "prints how far each branch is ahead or behind its base. "
+            "Catalog MCP checks UDI Catalog /health, then searches KPIs for ARR."
         ),
     ),
     (
