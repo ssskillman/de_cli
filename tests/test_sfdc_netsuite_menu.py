@@ -36,6 +36,37 @@ class SfdcNetSuiteMenuTests(unittest.TestCase):
         self.assertTrue(script.is_file())
         self.assertEqual(tool.resolve_cwd(), Path.home() / "github" / "bi-astronomer")
 
+    def test_exception_report_asks_for_a_contract_then_verifies_netsuite(self):
+        from de_cli.menu_groups import menu_group_for_tool
+        from de_cli.registry import find_tool
+
+        tool = find_tool("sfdc_netsuite-exception-report")
+        assert tool is not None
+        self.assertEqual(menu_group_for_tool(tool), "sfdc_netsuite")
+        self.assertEqual(tool.menu_summary, "Exception report")
+        self.assertEqual(tool.default_args, ("--exception-report",))
+        script = Path(tool.resolve_command()[0])
+        self.assertEqual(script.name, "run_sf_contracts_netsuite.sh")
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("--exception-report", text)
+        self.assertIn("--verify-ns", text)
+        self.assertIn('read -r -p "Contract: "', text)
+
+    def test_prod_full_send_asks_for_a_contract_then_writes(self):
+        from de_cli.menu_groups import menu_group_for_tool
+        from de_cli.registry import find_tool
+
+        tool = find_tool("sfdc_netsuite-prod-full-send")
+        assert tool is not None
+        self.assertEqual(menu_group_for_tool(tool), "sfdc_netsuite")
+        self.assertEqual(tool.menu_summary, "Prod full send")
+        self.assertTrue(tool.menu_requires_confirm)
+        self.assertEqual(tool.default_args, ("--prod-full-send",))
+        script = Path(tool.resolve_command()[0])
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("--prod-full-send", text)
+        self.assertIn('read -r -p "Contract: "', text)
+
 
 if __name__ == "__main__":
     unittest.main()
