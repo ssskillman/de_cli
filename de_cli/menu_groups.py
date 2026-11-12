@@ -21,7 +21,9 @@ MENU_GROUPS: tuple[tuple[str, str, str], ...] = (
         (
             "Salesforce contract to NetSuite (REC001) from the bi-astronomer checkout. "
             "Listener smoke reads the 10 newest contracts with --sf-org iterable-prod and does not write. "
-            "Run contract sync resolves a contract, then dry run, the exception report, or prod-prompt watch."
+            "Run contract sync asks for a contract, then dry run, the exception report, or prod-prompt watch. "
+            "Exception report asks for the same contract id and only checks that synced lines exist in NetSuite. "
+            "Prod full send asks for the contract id, then writes every Salesforce and NetSuite step with no per-step prompt."
         ),
     ),
     (

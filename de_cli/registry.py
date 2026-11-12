@@ -772,6 +772,40 @@ TOOLS: tuple[Tool, ...] = (
         category="sfdc_netsuite",
         aliases=("rec001", "sf-contracts-netsuite"),
     ),
+    Tool(
+        name="sfdc_netsuite-exception-report",
+        description=(
+            "Read-only SFDC to NetSuite exception report. Asks for a contract "
+            "number (4308 or 00004308) or an 800… Contract Id, then runs "
+            "sf_contracts_netsuite_cli.py --verify-ns against iterable-prod. "
+            "Does not write to Salesforce or NetSuite."
+        ),
+        menu_summary="Exception report",
+        script="scripts/run_sf_contracts_netsuite.sh",
+        default_args=("--exception-report",),
+        root="bi_astronomer",
+        cwd_root="bi_astronomer",
+        category="sfdc_netsuite",
+        aliases=("rec001-exception", "verify-ns"),
+    ),
+    Tool(
+        name="sfdc_netsuite-prod-full-send",
+        description=(
+            "Live REC001 prod full send. Asks for a contract number "
+            "(4311 or 00004311) or an 800… Contract Id, then runs "
+            "sf_contracts_netsuite_cli.py --prod-full-send against iterable-prod. "
+            "Every Salesforce and NetSuite write runs. There is no per-step prompt."
+        ),
+        menu_summary="Prod full send",
+        menu_hint="Live Salesforce and NetSuite writes. No per-step prompt.",
+        menu_requires_confirm=True,
+        script="scripts/run_sf_contracts_netsuite.sh",
+        default_args=("--prod-full-send",),
+        root="bi_astronomer",
+        cwd_root="bi_astronomer",
+        category="sfdc_netsuite",
+        aliases=("rec001-full-send", "prod-full-send"),
+    ),
 )
 
 
